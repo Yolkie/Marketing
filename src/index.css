@@ -1,0 +1,116 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  --transition-base: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  transition: var(--transition-base);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-weight: 500;
+}
+
+code {
+  font-family: 'JetBrains Mono', source-code-pro, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Neo-Brutalism base styles */
+[data-theme="light"] {
+  --bg: #FEFEFE;
+  --surface: #FFFFFF;
+  --border: #000000;
+  --text: #000000;
+  --textMuted: #666666;
+  --accent: #000000;
+  --accentHover: #333333;
+  --success: #00FF00;
+  --error: #FF0000;
+  --warning: #FFFF00;
+  --info: #0000FF;
+}
+
+[data-theme="dark"] {
+  --bg: #0A0A0A;
+  --surface: #1A1A1A;
+  --border: #FFFFFF;
+  --text: #FFFFFF;
+  --textMuted: #AAAAAA;
+  --accent: #FFFFFF;
+  --accentHover: #CCCCCC;
+  --success: #00FF00;
+  --error: #FF0000;
+  --warning: #FFFF00;
+  --info: #0000FF;
+}
+
+/* Brutal button base */
+.btn-brutal {
+  @apply border-2 border-black dark:border-white;
+  @apply bg-white dark:bg-black;
+  @apply text-black dark:text-white;
+  @apply font-bold;
+  box-shadow: 8px 8px 0px 0px;
+  @apply transition-all;
+  @apply active:translate-x-1 active:translate-y-1 active:shadow-none;
+  @apply hover:bg-gray-100 dark:hover:bg-gray-900;
+}
+
+.btn-brutal-primary {
+  @apply border-2 border-black dark:border-white;
+  @apply bg-black dark:bg-white;
+  @apply text-white dark:text-black;
+  @apply font-bold;
+  box-shadow: 8px 8px 0px 0px;
+  @apply transition-all;
+  @apply active:translate-x-1 active:translate-y-1 active:shadow-none;
+  @apply hover:bg-gray-900 dark:hover:bg-gray-100;
+}
+
+/* Brutal input base */
+.input-brutal {
+  @apply border-2 border-black dark:border-white;
+  @apply bg-white dark:bg-black;
+  @apply text-black dark:text-white;
+  @apply font-medium;
+  @apply focus:outline-none;
+  box-shadow: 4px 4px 0px 0px;
+  @apply transition-all;
+}
+
+.input-brutal:focus {
+  box-shadow: 4px 4px 0px 0px;
+}
+
+/* Brutal card base */
+.card-brutal {
+  @apply border-2 border-black dark:border-white;
+  @apply bg-white dark:bg-black;
+  box-shadow: 8px 8px 0px 0px;
+  @apply transition-all;
+}
+
+/* Grid pattern background */
+.grid-brutal {
+  background-image: 
+    linear-gradient(to right, rgba(0,0,0,0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0,0,0,0.05) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+[data-theme="dark"] .grid-brutal {
+  background-image: 
+    linear-gradient(to right, rgba(255,255,255,0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.05) 1px, transparent 1px);
+}
+
+

@@ -1,0 +1,1229 @@
+const express = require('express');
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { Pool } = require('pg');
+require('dotenv').config();
+
+// Import middleware
+const { apiLimiter, authLimiter, securityHeaders, corsOptions } = require('./middleware/security');
+const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+const {
+  validateRegister,
+  validateLogin,
+  validateUUIDParam,
+  validateContentSync,
+  validateCaptionCreation,
+  validateCaptionUpdate,
+} = require('./middleware/validation');
+
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+// Security middleware (must be first)
+app.use(securityHeaders);
+
+// CORS configuration
+app.use(cors(corsOptions));
+
+// Body parsing with size limit
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Request logging (simple)
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
+});
+
+// Validate required environment variables
+const requiredEnvVars = ['DB_PASSWORD', 'JWT_SECRET'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0 && process.env.NODE_ENV === 'production') {
+  console.error('❌ Missing required environment variables:', missingEnvVars.join(', '));
+  console.error('Please set these in your .env file');
+  process.exit(1);
+}
+
+// PostgreSQL connection with connection pooling
+// Support for remote databases (hosting services) with SSL
+const poolConfig = {
+  user: process.env.DB_USER || 'postgres',
+  host: process.env.DB_HOST || 'localhost',
+  database: process.env.DB_NAME || 'marketing_dashboard',
+  password: process.env.DB_PASSWORD || '',
+  port: parseInt(process.env.DB_PORT || '5432', 10),
+  max: 20, // Maximum number of clients in the pool
+  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+  connectionTimeoutMillis: 10000, // Increased timeout for remote databases (10 seconds)
+};
+
+// SSL configuration for remote databases
+if (process.env.DB_SSL === 'true' || process.env.DB_SSL === '1') {
+  poolConfig.ssl = {
+    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
+  };
+  console.log('🔒 SSL enabled for database connection');
+}
+
+// If DB_HOST is not localhost, assume it's a remote database and enable SSL
+if (process.env.DB_HOST && process.env.DB_HOST !== 'localhost' && process.env.DB_HOST !== '127.0.0.1') {
+  if (!poolConfig.ssl) {
+    poolConfig.ssl = {
+      rejectUnauthorized: false, // Allow self-signed certificates for remote databases
+    };
+    console.log('🔒 SSL enabled for remote database connection');
+  }
+}
+
+const pool = new Pool(poolConfig);
+
+// Handle pool errors (connection errors, etc.)
+pool.on('error', (err, client) => {
+  console.error('❌ Unexpected database pool error:', {
+    message: err.message,
+    code: err.code,
+    timestamp: new Date().toISOString(),
+  });
+  
+  // Don't exit the process, just log the error
+  // The pool will try to reconnect automatically
+});
+
+// Handle connection errors
+pool.on('connect', (client) => {
+  console.log('🔌 New database connection established');
+});
+
+// Test database connection with better error handling
+pool.query('SELECT NOW()', (err, res) => {
+  if (err) {
+    console.error('❌ Database connection error:', {
+      message: err.message,
+      code: err.code,
+      host: poolConfig.host,
+      port: poolConfig.port,
+      database: poolConfig.database,
+      user: poolConfig.user,
+    });
+    
+    // Provide helpful error messages
+    if (err.code === 'ECONNREFUSED') {
+      console.error('💡 Connection refused. Check:');
+      console.error('   1. Database server is running');
+      console.error('   2. Host and port are correct');
+      console.error('   3. Firewall allows connections');
+    } else if (err.code === 'ETIMEDOUT') {
+      console.error('💡 Connection timeout. Check:');
+      console.error('   1. Database server is accessible');
+      console.error('   2. Network connection is stable');
+      console.error('   3. Connection timeout is sufficient');
+    } else if (err.code === '28P01') {
+      console.error('💡 Authentication failed. Check:');
+      console.error('   1. Username is correct');
+      console.error('   2. Password is correct');
+      console.error('   3. User has access to the database');
+    } else if (err.code === '3D000') {
+      console.error('💡 Database does not exist. Check:');
+      console.error('   1. Database name is correct');
+      console.error('   2. Database has been created');
+    }
+  } else {
+    console.log('✅ Database connected successfully');
+    console.log('   Host:', poolConfig.host);
+    console.log('   Port:', poolConfig.port);
+    console.log('   Database:', poolConfig.database);
+    console.log('   User:', poolConfig.user);
+  }
+});
+
+// Authentication middleware
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+
+  if (!process.env.JWT_SECRET) {
+    return res.status(500).json({ error: 'Server configuration error' });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+};
+
+// ==================== AUTHENTICATION ROUTES ====================
+
+// Register new user
+app.post('/api/auth/register', authLimiter, validateRegister, async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    // Check if user exists
+    const userCheck = await pool.query(
+      'SELECT id FROM users WHERE email = $1',
+      [email]
+    );
+
+    if (userCheck.rows.length > 0) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user
+    const result = await pool.query(
+      'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, created_at',
+      [email, hashedPassword, name || email.split('@')[0]]
+    );
+
+    const user = result.rows[0];
+
+    // Generate JWT token
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({ error: 'Server configuration error' });
+    }
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+      },
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Login
+app.post('/api/auth/login', authLimiter, validateLogin, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    console.log('🔐 Login attempt:', { email, timestamp: new Date().toISOString() });
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    // Find user
+    console.log('📡 Querying database for user:', email);
+    let result;
+    
+    try {
+      // Use pool.query() which handles connection management automatically
+      result = await pool.query(
+        'SELECT id, email, password_hash, name FROM users WHERE email = $1',
+        [email]
+      );
+      console.log('✅ Database query successful, found', result.rows.length, 'user(s)');
+    } catch (dbError) {
+      console.error('❌ Database query error:', {
+        message: dbError.message,
+        code: dbError.code,
+        detail: dbError.detail,
+        hint: dbError.hint,
+        stack: process.env.NODE_ENV === 'development' ? dbError.stack : undefined,
+      });
+      
+      // Provide helpful error messages
+      if (dbError.code === 'ECONNREFUSED' || dbError.message?.includes('ECONNREFUSED')) {
+        return res.status(500).json({ 
+          error: 'Database connection failed',
+          message: 'Cannot connect to database server. Check your database configuration.',
+          details: process.env.NODE_ENV === 'development' ? {
+            message: dbError.message,
+            code: dbError.code
+          } : undefined
+        });
+      } else if (dbError.code === 'ETIMEDOUT' || dbError.message?.includes('timeout')) {
+        return res.status(500).json({ 
+          error: 'Database connection timeout',
+          message: 'Database server did not respond in time. Check your network connection.',
+          details: process.env.NODE_ENV === 'development' ? {
+            message: dbError.message,
+            code: dbError.code
+          } : undefined
+        });
+      } else if (dbError.code === '28P01' || dbError.message?.includes('password authentication')) {
+        return res.status(500).json({ 
+          error: 'Database authentication failed',
+          message: 'Invalid database credentials. Check your .env file.',
+          details: process.env.NODE_ENV === 'development' ? {
+            message: dbError.message,
+            code: dbError.code
+          } : undefined
+        });
+      } else if (dbError.code === '3D000' || dbError.message?.includes('does not exist')) {
+        return res.status(500).json({ 
+          error: 'Database not found',
+          message: 'Database does not exist. Check your database name in .env file.',
+          details: process.env.NODE_ENV === 'development' ? {
+            message: dbError.message,
+            code: dbError.code
+          } : undefined
+        });
+      } else if (dbError.message?.includes('SSL') || dbError.code === '08006') {
+        return res.status(500).json({ 
+          error: 'SSL connection error',
+          message: 'SSL connection required. Add DB_SSL=true to your .env file.',
+          details: process.env.NODE_ENV === 'development' ? {
+            message: dbError.message,
+            code: dbError.code
+          } : undefined
+        });
+      }
+      
+      throw dbError; // Re-throw to be caught by outer catch
+    }
+
+    if (result.rows.length === 0) {
+      console.log('❌ User not found:', email);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const user = result.rows[0];
+    console.log('✅ User found:', { id: user.id, email: user.email, name: user.name });
+
+    // Verify password
+    console.log('🔒 Verifying password...');
+    let validPassword;
+    try {
+      validPassword = await bcrypt.compare(password, user.password_hash);
+      console.log('✅ Password verification:', validPassword ? 'success' : 'failed');
+    } catch (bcryptError) {
+      console.error('❌ Password verification error:', bcryptError);
+      return res.status(500).json({ 
+        error: 'Password verification failed',
+        message: 'Error verifying password. Please try again.',
+        details: process.env.NODE_ENV === 'development' ? bcryptError.message : undefined
+      });
+    }
+
+    if (!validPassword) {
+      console.log('❌ Invalid password for user:', email);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Generate JWT token
+    if (!process.env.JWT_SECRET) {
+      console.error('❌ JWT_SECRET not configured');
+      return res.status(500).json({ error: 'Server configuration error', message: 'JWT_SECRET is not set' });
+    }
+
+    console.log('🎫 Generating JWT token...');
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    console.log('✅ Login successful for user:', email);
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Login error:', {
+      message: error.message,
+      code: error.code,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      timestamp: new Date().toISOString(),
+    });
+    
+    // Return detailed error in development, generic in production
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: process.env.NODE_ENV === 'development' ? error.message : 'An error occurred during login. Please try again.',
+      details: process.env.NODE_ENV === 'development' ? {
+        code: error.code,
+        stack: error.stack
+      } : undefined
+    });
+  }
+});
+
+// Get current user
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, email, name, created_at FROM users WHERE id = $1',
+      [req.user.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error('Get user error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ==================== CONTENT ROUTES ====================
+
+// Get all content items
+app.get('/api/content', apiLimiter, authenticateToken, async (req, res) => {
+  try {
+    const { status, fileType } = req.query;
+
+    let query = `
+      SELECT 
+        c.*,
+        json_agg(
+          json_build_object(
+            'id', cap.id,
+            'version', cap.version,
+            'tone', cap.tone,
+            'content', cap.content,
+            'status', cap.status,
+            'createdAt', cap.created_at,
+            'approvedBy', cap.approved_by,
+            'approvedAt', cap.approved_at
+          )
+        ) FILTER (WHERE cap.id IS NOT NULL) as captions
+      FROM content_items c
+      LEFT JOIN captions cap ON c.id = cap.content_item_id
+      WHERE 1=1
+    `;
+    const params = [];
+    let paramCount = 1;
+
+    if (status) {
+      query += ` AND c.status = $${paramCount}`;
+      params.push(status);
+      paramCount++;
+    }
+
+    if (fileType) {
+      query += ` AND c.file_type = $${paramCount}`;
+      params.push(fileType);
+      paramCount++;
+    }
+
+    query += ` GROUP BY c.id ORDER BY c.uploaded_at DESC`;
+
+    const result = await pool.query(query, params);
+
+    // Transform results
+    const contentItems = result.rows.map(row => ({
+      id: row.id,
+      filename: row.filename,
+      fileType: row.file_type,
+      uploadedAt: row.uploaded_at,
+      status: row.status,
+      driveUrl: row.drive_url,
+      thumbnailUrl: row.thumbnail_url,
+      embedUrl: row.embed_url,
+      mimeType: row.mime_type,
+      captions: row.captions || [],
+    }));
+
+    res.json({ content: contentItems });
+  } catch (error) {
+    console.error('Get content error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get single content item
+app.get('/api/content/:id', apiLimiter, authenticateToken, validateUUIDParam('id'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `SELECT 
+        c.*,
+        json_agg(
+          json_build_object(
+            'id', cap.id,
+            'version', cap.version,
+            'tone', cap.tone,
+            'content', cap.content,
+            'status', cap.status,
+            'createdAt', cap.created_at,
+            'approvedBy', cap.approved_by,
+            'approvedAt', cap.approved_at
+          )
+        ) FILTER (WHERE cap.id IS NOT NULL) as captions
+      FROM content_items c
+      LEFT JOIN captions cap ON c.id = cap.content_item_id
+      WHERE c.id = $1
+      GROUP BY c.id`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Content item not found' });
+    }
+
+    const row = result.rows[0];
+    const contentItem = {
+      id: row.id,
+      filename: row.filename,
+      fileType: row.file_type,
+      uploadedAt: row.uploaded_at,
+      status: row.status,
+      driveUrl: row.drive_url,
+      thumbnailUrl: row.thumbnail_url,
+      embedUrl: row.embed_url,
+      mimeType: row.mime_type,
+      captions: row.captions || [],
+    };
+
+    res.json({ content: contentItem });
+  } catch (error) {
+    console.error('Get content item error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Fetch files from Google Drive (backend endpoint to avoid CORS)
+// Allow test token for test mode
+app.post('/api/drive/fetch', apiLimiter, async (req, res) => {
+  // Optional auth check - allow test mode
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  // In test mode, allow without auth or with test token
+  if (token && token !== 'test-token') {
+    // Verify real token
+    try {
+      if (process.env.JWT_SECRET) {
+        jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+          if (err && process.env.NODE_ENV === 'production') {
+            return res.status(403).json({ error: 'Invalid or expired token' });
+          }
+          if (!err) {
+            req.user = user;
+          }
+        });
+      }
+    } catch (err) {
+      // Ignore auth errors in test mode
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(403).json({ error: 'Invalid token' });
+      }
+    }
+  }
+  try {
+    const { folderId, apiKey } = req.body;
+
+    if (!folderId || !apiKey) {
+      return res.status(400).json({ error: 'Folder ID and API Key are required' });
+    }
+
+    // Validate inputs
+    if (!folderId.trim() || !apiKey.trim()) {
+      return res.status(400).json({ error: 'Folder ID and API Key cannot be empty' });
+    }
+
+    // Validate API key format
+    const trimmedApiKey = apiKey.trim();
+    if (trimmedApiKey.startsWith('GOCSPX-')) {
+      return res.status(400).json({ 
+        error: '❌ You provided a Client Secret (OAuth 2.0), not an API Key!\n\n' +
+          'Client Secrets start with "GOCSPX-..." (OAuth 2.0)\n' +
+          'API Keys start with "AIzaSy..." (for Google Drive API)\n\n' +
+          'To fix this:\n' +
+          '1. Go to Google Cloud Console → APIs & Services → Credentials\n' +
+          '2. Click "+ CREATE CREDENTIALS" → "API key"\n' +
+          '3. Copy the new API key (starts with AIzaSy...)\n' +
+          '4. Enable Google Drive API if not already enabled\n' +
+          '5. Use the API key (not the client secret) in Settings\n\n' +
+          'See GET_API_KEY.md for detailed instructions.'
+      });
+    }
+    
+    if (!trimmedApiKey.startsWith('AIzaSy')) {
+      return res.status(400).json({ 
+        error: '❌ Invalid API Key format!\n\n' +
+          'API Keys should start with "AIzaSy..."\n' +
+          'Your key starts with: "' + trimmedApiKey.substring(0, 6) + '..."\n\n' +
+          'Please check:\n' +
+          '1. You copied the correct API key (not client secret)\n' +
+          '2. No extra spaces before or after the key\n' +
+          '3. The API key is from Google Cloud Console → Credentials\n\n' +
+          'See GET_API_KEY.md for help creating an API key.'
+      });
+    }
+
+    // Build query with proper URL encoding
+    const query = `'${folderId.trim()}' in parents and (mimeType contains 'video/' or mimeType contains 'image/')`;
+    const fields = 'files(id,name,mimeType,createdTime,thumbnailLink,webViewLink)';
+    
+    // Construct URL with proper encoding
+    const url = new URL('https://www.googleapis.com/drive/v3/files');
+    url.searchParams.set('q', query);
+    url.searchParams.set('fields', fields);
+    url.searchParams.set('key', apiKey.trim());
+
+    // Log the request (hide API key)
+    const logUrl = url.toString().replace(apiKey.trim(), 'API_KEY_HIDDEN');
+    console.log('📡 Fetching from Google Drive API:');
+    console.log('   URL:', logUrl);
+    console.log('   Folder ID:', folderId.trim());
+    console.log('   API Key length:', apiKey.trim().length);
+    console.log('   API Key starts with:', apiKey.trim().substring(0, 6) + '...');
+
+    // Make request from backend (no CORS issues)
+    const driveResponse = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    console.log('📥 Google Drive API Response:');
+    console.log('   Status:', driveResponse.status);
+    console.log('   Status Text:', driveResponse.statusText);
+
+    if (!driveResponse.ok) {
+      let errorMessage = 'Failed to fetch files from Google Drive';
+      let errorDetails = null;
+      let rawErrorText = null;
+
+      try {
+        // Clone the response to read it as both text and JSON
+        const responseClone = driveResponse.clone();
+        rawErrorText = await responseClone.text();
+        console.log('   Raw Error Response:', rawErrorText);
+        
+        // Try to parse as JSON
+        try {
+          errorDetails = await driveResponse.json();
+        } catch (parseErr) {
+          console.log('   Could not parse error as JSON, trying to parse raw text...');
+          try {
+            errorDetails = JSON.parse(rawErrorText);
+          } catch (e) {
+            console.log('   Could not parse error as JSON');
+          }
+        }
+        
+        if (errorDetails && errorDetails.error) {
+          errorMessage = errorDetails.error.message || errorMessage;
+          
+          // Log full error details
+          console.error('❌ Google Drive API Error Details:', JSON.stringify(errorDetails, null, 2));
+          
+          // Provide helpful error messages
+          if (errorMessage.includes('API key not valid') || 
+              errorMessage.includes('invalid API key') || 
+              errorMessage.includes('API_KEY_INVALID') ||
+              errorMessage.includes('Bad Request')) {
+            errorMessage = 'API key is not valid. Please check:\n\n' +
+              '1. ✅ The API key is correct (no extra spaces before/after)\n' +
+              '2. ✅ Google Drive API is enabled in your Google Cloud project\n' +
+              '3. ✅ The API key restrictions allow Google Drive API\n' +
+              '4. ✅ The API key has not been deleted or regenerated\n' +
+              '5. ✅ API key format: Should start with "AIzaSy..."\n\n' +
+              `Current API key length: ${apiKey.trim().length} characters\n` +
+              `Current API key starts with: ${apiKey.trim().substring(0, 6)}...`;
+          } else if (errorMessage.includes('permission denied') || 
+                     errorMessage.includes('403') ||
+                     errorMessage.includes('Forbidden')) {
+            errorMessage = 'Permission denied. Please check:\n\n' +
+              '1. ✅ The folder is shared (set to "Anyone with the link")\n' +
+              '2. ✅ The folder ID is correct\n' +
+              '3. ✅ The API key has proper permissions\n' +
+              '4. ✅ The folder is accessible';
+          } else if (errorMessage.includes('not found') || 
+                     errorMessage.includes('404')) {
+            errorMessage = 'Folder not found. Please check:\n\n' +
+              '1. ✅ The folder ID is correct (from the URL: drive.google.com/drive/folders/FOLDER_ID)\n' +
+              '2. ✅ The folder exists and is accessible\n' +
+              `Current Folder ID: ${folderId.trim()}`;
+          } else {
+            // Show the actual error message
+            errorMessage = `Google Drive API Error: ${errorMessage}\n\n` +
+              `Status: ${driveResponse.status} ${driveResponse.statusText}\n` +
+              `Full error: ${rawErrorText}`;
+          }
+        } else {
+          errorMessage = `HTTP ${driveResponse.status}: ${driveResponse.statusText}\n\n` +
+            `Response: ${rawErrorText}`;
+        }
+      } catch (parseError) {
+        console.error('Error parsing error response:', parseError);
+        errorMessage = `HTTP ${driveResponse.status}: ${driveResponse.statusText}`;
+      }
+
+      console.error('❌ Google Drive API Error Summary:', {
+        status: driveResponse.status,
+        statusText: driveResponse.statusText,
+        error: errorDetails,
+        rawResponse: rawErrorText,
+      });
+
+      return res.status(driveResponse.status).json({ 
+        error: errorMessage,
+        details: errorDetails,
+        status: driveResponse.status,
+        statusText: driveResponse.statusText,
+      });
+    }
+
+    const driveData = await driveResponse.json();
+    const files = driveData.files || [];
+
+    // Transform files to our format
+    const transformedFiles = files.map((file) => {
+      const isVideo = file.mimeType?.startsWith('video/') || false;
+      const isImage = file.mimeType?.startsWith('image/') || false;
+      
+      if (!isVideo && !isImage) return null;
+
+      return {
+        id: file.id,
+        filename: file.name,
+        fileType: isVideo ? 'video' : 'image',
+        uploadedAt: file.createdTime || new Date().toISOString(),
+        status: 'pending_review',
+        driveUrl: `https://drive.google.com/file/d/${file.id}/view`,
+        thumbnailUrl: file.thumbnailLink || `https://drive.google.com/thumbnail?id=${file.id}&sz=w400`,
+        embedUrl: isVideo 
+          ? `https://drive.google.com/file/d/${file.id}/preview`
+          : `https://drive.google.com/uc?export=view&id=${file.id}`,
+        mimeType: file.mimeType,
+      };
+    }).filter(Boolean);
+
+    console.log(`Successfully fetched ${transformedFiles.length} file(s) from Google Drive`);
+
+    res.json({ 
+      files: transformedFiles,
+      count: transformedFiles.length 
+    });
+  } catch (error) {
+    console.error('Error fetching Drive files:', error);
+    res.status(500).json({ 
+      error: 'Internal server error while fetching from Google Drive',
+      message: error.message 
+    });
+  }
+});
+
+// Sync content from Google Drive
+app.post('/api/content/sync', apiLimiter, authenticateToken, validateContentSync, async (req, res) => {
+  try {
+    const { folderId, apiKey } = req.body;
+
+    if (!folderId || !apiKey) {
+      return res.status(400).json({ error: 'Folder ID and API Key are required' });
+    }
+
+    // Fetch files from Google Drive (you can move this logic here or keep it in frontend)
+    // For now, this endpoint accepts content items to sync
+    const { contentItems } = req.body;
+
+    if (!contentItems || !Array.isArray(contentItems)) {
+      return res.status(400).json({ error: 'Content items array is required' });
+    }
+
+    const syncedItems = [];
+
+    for (const item of contentItems) {
+      // Check if item already exists
+      const existing = await pool.query(
+        'SELECT id FROM content_items WHERE drive_file_id = $1',
+        [item.id]
+      );
+
+      if (existing.rows.length > 0) {
+        // Update existing
+        await pool.query(
+          `UPDATE content_items 
+           SET filename = $1, file_type = $2, drive_url = $3, thumbnail_url = $4, 
+               embed_url = $5, mime_type = $6, updated_at = NOW()
+           WHERE drive_file_id = $7`,
+          [
+            item.filename,
+            item.fileType,
+            item.driveUrl,
+            item.thumbnailUrl,
+            item.embedUrl,
+            item.mimeType,
+            item.id,
+          ]
+        );
+        syncedItems.push(existing.rows[0].id);
+      } else {
+        // Insert new
+        const result = await pool.query(
+          `INSERT INTO content_items 
+           (drive_file_id, filename, file_type, drive_url, thumbnail_url, embed_url, mime_type, status, uploaded_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_review', NOW())
+           RETURNING id`,
+          [
+            item.id,
+            item.filename,
+            item.fileType,
+            item.driveUrl,
+            item.thumbnailUrl,
+            item.embedUrl,
+            item.mimeType,
+          ]
+        );
+        syncedItems.push(result.rows[0].id);
+      }
+    }
+
+    res.json({ 
+      message: 'Content synced successfully',
+      syncedCount: syncedItems.length,
+      syncedIds: syncedItems,
+    });
+  } catch (error) {
+    console.error('Sync content error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ==================== CAPTION ROUTES ====================
+
+// Create captions for content item
+app.post('/api/content/:contentId/captions', apiLimiter, authenticateToken, validateUUIDParam('contentId'), validateCaptionCreation, async (req, res) => {
+  try {
+    const { contentId } = req.params;
+    const { captions } = req.body;
+
+    if (!captions || !Array.isArray(captions)) {
+      return res.status(400).json({ error: 'Captions array is required' });
+    }
+
+    const createdCaptions = [];
+
+    for (const caption of captions) {
+      const result = await pool.query(
+        `INSERT INTO captions (content_item_id, tone, content, status, created_at)
+         VALUES ($1, $2, $3, 'pending', NOW())
+         RETURNING id, version, tone, content, status, created_at`,
+        [contentId, caption.tone, caption.content]
+      );
+      createdCaptions.push(result.rows[0]);
+    }
+
+    res.status(201).json({ captions: createdCaptions });
+  } catch (error) {
+    console.error('Create captions error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update caption
+app.put('/api/captions/:id', apiLimiter, authenticateToken, validateUUIDParam('id'), validateCaptionUpdate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { content } = req.body;
+
+    if (!content) {
+      return res.status(400).json({ error: 'Content is required' });
+    }
+
+    // Get current version
+    const current = await pool.query(
+      'SELECT version FROM captions WHERE id = $1',
+      [id]
+    );
+
+    if (current.rows.length === 0) {
+      return res.status(404).json({ error: 'Caption not found' });
+    }
+
+    const newVersion = current.rows[0].version + 1;
+
+    // Update caption
+    const result = await pool.query(
+      `UPDATE captions 
+       SET content = $1, version = $2, updated_at = NOW()
+       WHERE id = $3
+       RETURNING id, version, tone, content, status, created_at, updated_at`,
+      [content, newVersion, id]
+    );
+
+    res.json({ caption: result.rows[0] });
+  } catch (error) {
+    console.error('Update caption error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Approve caption and trigger webhook
+app.post('/api/captions/:id/approve', apiLimiter, authenticateToken, validateUUIDParam('id'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get caption with content item info
+    const captionResult = await pool.query(
+      `SELECT c.*, ci.drive_file_id, ci.filename, ci.file_type, ci.drive_url, ci.embed_url
+       FROM captions c
+       JOIN content_items ci ON c.content_item_id = ci.id
+       WHERE c.id = $1`,
+      [id]
+    );
+
+    if (captionResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Caption not found' });
+    }
+
+    const caption = captionResult.rows[0];
+
+    // Update caption status
+    await pool.query(
+      `UPDATE captions 
+       SET status = 'approved', approved_by = $1, approved_at = NOW()
+       WHERE id = $2`,
+      [req.user.userId, id]
+    );
+
+    // Update content item status
+    await pool.query(
+      `UPDATE content_items 
+       SET status = 'approved', updated_at = NOW()
+       WHERE id = $1`,
+      [caption.content_item_id]
+    );
+
+    // Trigger webhook for n8n (if configured)
+    if (process.env.N8N_WEBHOOK_URL) {
+      try {
+        await fetch(process.env.N8N_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event: 'caption_approved',
+            captionId: id,
+            contentItemId: caption.content_item_id,
+            caption: {
+              tone: caption.tone,
+              content: caption.content,
+              version: caption.version,
+            },
+            content: {
+              filename: caption.filename,
+              fileType: caption.file_type,
+              driveUrl: caption.drive_url,
+              embedUrl: caption.embed_url,
+            },
+            approvedBy: req.user.userId,
+            approvedAt: new Date().toISOString(),
+          }),
+        });
+      } catch (webhookError) {
+        console.error('Webhook error (non-critical):', webhookError);
+        // Don't fail the request if webhook fails
+      }
+    }
+
+    res.json({
+      message: 'Caption approved successfully',
+      captionId: id,
+      webhookTriggered: !!process.env.N8N_WEBHOOK_URL,
+    });
+  } catch (error) {
+    console.error('Approve caption error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ==================== WEBHOOK ROUTES ====================
+
+// Webhook endpoint for Google Drive notifications
+app.post('/api/webhooks/drive', async (req, res) => {
+  try {
+    // Verify webhook secret if configured
+    const webhookSecret = req.headers['x-webhook-secret'];
+    if (process.env.WEBHOOK_SECRET && webhookSecret !== process.env.WEBHOOK_SECRET) {
+      return res.status(401).json({ error: 'Invalid webhook secret' });
+    }
+
+    const { event, fileId, fileName, fileType, mimeType } = req.body;
+
+    console.log('Drive webhook received:', { event, fileId, fileName });
+
+    // Handle different webhook events
+    if (event === 'file_created' || event === 'file_updated') {
+      // You can trigger caption generation here
+      // For now, just log it
+      console.log('File event:', { fileId, fileName, fileType });
+    }
+
+    res.json({ received: true, event });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Webhook endpoint for n8n to send data back
+app.post('/api/webhooks/n8n', async (req, res) => {
+  try {
+    const webhookSecret = req.headers['x-webhook-secret'];
+    if (process.env.WEBHOOK_SECRET && webhookSecret !== process.env.WEBHOOK_SECRET) {
+      return res.status(401).json({ error: 'Invalid webhook secret' });
+    }
+
+    const { event, data } = req.body;
+
+    console.log('n8n webhook received:', { event, data });
+
+    // Handle n8n webhook events
+    if (event === 'captions_generated') {
+      // Store generated captions
+      // Support both contentItemId (UUID) and driveFileId (Google Drive file ID)
+      const { contentItemId, driveFileId, captions } = data;
+      
+      if (!captions || !Array.isArray(captions)) {
+        return res.status(400).json({ error: 'Captions array is required' });
+      }
+
+      let finalContentItemId = contentItemId;
+
+      // If driveFileId is provided instead of contentItemId, look it up
+      if (driveFileId && !contentItemId) {
+        // Validate driveFileId format (Google Drive IDs are typically alphanumeric, 20-50 chars)
+        if (typeof driveFileId !== 'string' || driveFileId.trim().length < 10) {
+          return res.status(400).json({ 
+            error: 'Invalid driveFileId format',
+            message: 'driveFileId must be a valid Google Drive file ID (string, min 10 characters)'
+          });
+        }
+
+        const trimmedDriveFileId = driveFileId.trim();
+        
+        const contentResult = await pool.query(
+          'SELECT id, drive_file_id, filename FROM content_items WHERE drive_file_id = $1',
+          [trimmedDriveFileId]
+        );
+
+        if (contentResult.rows.length === 0) {
+          console.error(`❌ Content item lookup failed for drive_file_id: ${trimmedDriveFileId}`);
+          return res.status(404).json({ 
+            error: 'Content item not found',
+            message: `No content item found with drive_file_id: ${trimmedDriveFileId}. Make sure the content was stored first.`,
+            driveFileId: trimmedDriveFileId
+          });
+        }
+
+        // Verify we got exactly one match (should be unique due to UNIQUE constraint)
+        if (contentResult.rows.length > 1) {
+          console.error(`⚠️ Multiple content items found for drive_file_id: ${trimmedDriveFileId}`, contentResult.rows);
+        }
+
+        const contentItem = contentResult.rows[0];
+        finalContentItemId = contentItem.id;
+        
+        // Enhanced logging with verification
+        console.log(`✅ Content item lookup successful:`, {
+          driveFileId: trimmedDriveFileId,
+          contentItemId: finalContentItemId,
+          filename: contentItem.filename,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      // If both are provided, verify they match
+      if (driveFileId && contentItemId) {
+        const verifyResult = await pool.query(
+          'SELECT id, drive_file_id, filename FROM content_items WHERE id = $1 AND drive_file_id = $2',
+          [contentItemId, driveFileId.trim()]
+        );
+        
+        if (verifyResult.rows.length === 0) {
+          console.error(`❌ Mismatch detected: contentItemId ${contentItemId} does not match driveFileId ${driveFileId}`);
+          return res.status(400).json({ 
+            error: 'Content item mismatch',
+            message: `The provided contentItemId (${contentItemId}) does not match the driveFileId (${driveFileId}). This prevents incorrect caption linking.`,
+            contentItemId,
+            driveFileId: driveFileId.trim()
+          });
+        }
+        
+        console.log(`✅ Verified contentItemId matches driveFileId:`, {
+          contentItemId,
+          driveFileId: driveFileId.trim(),
+          filename: verifyResult.rows[0].filename
+        });
+      }
+
+      if (!finalContentItemId) {
+        return res.status(400).json({ 
+          error: 'Content item identifier required',
+          message: 'Either contentItemId (UUID) or driveFileId (Google Drive file ID) must be provided'
+        });
+      }
+
+      // Validate captions
+      const validCaptions = captions.filter(cap => 
+        cap.tone && cap.content && 
+        ['Professional', 'Casual', 'Engaging'].includes(cap.tone) &&
+        cap.content.trim().length >= 10
+      );
+
+      if (validCaptions.length === 0) {
+        return res.status(400).json({ 
+          error: 'No valid captions provided',
+          message: 'Captions must have tone (Professional/Casual/Engaging) and content (min 10 characters)'
+        });
+      }
+
+      // Get content item details for verification and response
+      const contentItemResult = await pool.query(
+        'SELECT id, drive_file_id, filename, file_type FROM content_items WHERE id = $1',
+        [finalContentItemId]
+      );
+      
+      if (contentItemResult.rows.length === 0) {
+        console.error(`❌ Content item ${finalContentItemId} not found during caption insertion`);
+        return res.status(404).json({ 
+          error: 'Content item not found',
+          message: `Content item ${finalContentItemId} was not found. This should not happen.`
+        });
+      }
+      
+      const contentItem = contentItemResult.rows[0];
+      const verifiedDriveFileId = contentItem.drive_file_id;
+      
+      // Final verification: ensure the driveFileId matches (if provided)
+      if (driveFileId && driveFileId.trim() !== verifiedDriveFileId) {
+        console.error(`❌ CRITICAL: driveFileId mismatch during insertion:`, {
+          provided: driveFileId.trim(),
+          actual: verifiedDriveFileId,
+          contentItemId: finalContentItemId
+        });
+        return res.status(400).json({ 
+          error: 'Drive file ID mismatch',
+          message: `The driveFileId provided (${driveFileId.trim()}) does not match the content item's drive_file_id (${verifiedDriveFileId}). Captions were not stored to prevent data corruption.`,
+          providedDriveFileId: driveFileId.trim(),
+          actualDriveFileId: verifiedDriveFileId
+        });
+      }
+
+      // Store captions with transaction for atomicity
+      const insertedCaptions = [];
+      
+      try {
+        // Use a transaction to ensure all captions are inserted or none
+        await pool.query('BEGIN');
+        
+        for (const caption of validCaptions) {
+          const result = await pool.query(
+            `INSERT INTO captions (content_item_id, tone, content, status, created_at)
+             VALUES ($1, $2, $3, 'pending', NOW())
+             RETURNING id, version, tone, content, status, created_at`,
+            [finalContentItemId, caption.tone, caption.content.trim()]
+          );
+          insertedCaptions.push(result.rows[0]);
+        }
+        
+        await pool.query('COMMIT');
+        
+        // Enhanced logging with full verification details
+        console.log(`✅ Successfully stored ${insertedCaptions.length} caption(s):`, {
+          contentItemId: finalContentItemId,
+          driveFileId: verifiedDriveFileId,
+          filename: contentItem.filename,
+          fileType: contentItem.file_type,
+          captionCount: insertedCaptions.length,
+          captions: insertedCaptions.map(c => ({ id: c.id, tone: c.tone })),
+          timestamp: new Date().toISOString()
+        });
+      } catch (insertError) {
+        await pool.query('ROLLBACK');
+        console.error('❌ Error storing captions, transaction rolled back:', insertError);
+        throw insertError;
+      }
+
+      res.json({ 
+        received: true, 
+        event,
+        message: `Successfully stored ${insertedCaptions.length} caption(s)`,
+        contentItemId: finalContentItemId,
+        driveFileId: verifiedDriveFileId, // Return for verification
+        filename: contentItem.filename,     // Return for verification
+        fileType: contentItem.file_type,   // Return for verification
+        captions: insertedCaptions,
+        verification: {
+          driveFileId: verifiedDriveFileId,
+          contentItemId: finalContentItemId,
+          captionCount: insertedCaptions.length,
+          timestamp: new Date().toISOString()
+        }
+      });
+    } else {
+      res.json({ received: true, event });
+    }
+  } catch (error) {
+    console.error('n8n webhook error:', error);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: error.message 
+    });
+  }
+});
+
+// Health check
+app.get('/api/health', (req, res) => {
+  // Check database connection
+  pool.query('SELECT NOW()', (err) => {
+    if (err) {
+      return res.status(503).json({
+        status: 'error',
+        database: 'disconnected',
+        timestamp: new Date().toISOString(),
+      });
+    }
+    res.json({
+      status: 'ok',
+      database: 'connected',
+      timestamp: new Date().toISOString(),
+    });
+  });
+});
+
+// 404 handler (must be after all routes)
+app.use(notFoundHandler);
+
+// Error handler (must be last)
+app.use(errorHandler);
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`📊 Database: ${process.env.DB_NAME || 'marketing_dashboard'}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  if (process.env.NODE_ENV === 'production') {
+    console.log('🔒 Production mode: Security features enabled');
+  }
+});
+

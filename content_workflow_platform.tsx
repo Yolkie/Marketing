@@ -1,0 +1,757 @@
+import { useState, useEffect } from 'react';
+import { FileVideo, Clock, CheckCircle, Edit3, Loader, Eye, ThumbsUp, AlertCircle, Settings, Moon, Sun, LogOut, RefreshCw } from 'lucide-react';
+import { useTheme } from './src/contexts/ThemeContext.jsx';
+
+// Configuration - Set your Google Drive folder ID here
+// Vite uses import.meta.env instead of process.env
+// These are read from .env file and persist across sessions
+const getGoogleDriveFolderId = () => import.meta.env.VITE_GOOGLE_DRIVE_FOLDER_ID || '';
+const getGoogleApiKey = () => import.meta.env.VITE_GOOGLE_API_KEY || '';
+
+const ContentReviewDashboard = ({ user, onLogout }) => {
+  const { theme, toggleTheme } = useTheme();
+  const [videos, setVideos] = useState([]);
+  const [selectedVideo, setSelectedVideo] = useState(null);
+  const [editingCaption, setEditingCaption] = useState(null);
+  const [editedText, setEditedText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState('pending');
+  // Always read from environment variables (from .env file)
+  // These persist across sessions and don't reset
+  const driveFolderId = getGoogleDriveFolderId();
+  const apiKey = getGoogleApiKey();
+  const [showSettings, setShowSettings] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Google Drive API helper functions
+  const getDriveFileUrl = (fileId) => {
+    return `https://drive.google.com/file/d/${fileId}/view`;
+  };
+
+  const getDriveThumbnailUrl = (fileId, isVideo = false) => {
+    if (isVideo) {
+      return `https://drive.google.com/thumbnail?id=${fileId}&sz=w400`;
+    }
+    return `https://drive.google.com/thumbnail?id=${fileId}&sz=w400`;
+  };
+
+  const getDriveEmbedUrl = (fileId, isVideo = false) => {
+    if (isVideo) {
+      return `https://drive.google.com/file/d/${fileId}/preview`;
+    }
+    return `https://drive.google.com/uc?export=view&id=${fileId}`;
+  };
+
+  // Fetch files from Google Drive folder
+  const fetchDriveFiles = async (folderId, apiKey) => {
+    if (!folderId || !apiKey) {
+      throw new Error('Google Drive Folder ID and API Key are required');
+    }
+
+    if (!folderId.trim()) {
+      throw new Error('Folder ID cannot be empty');
+    }
+    if (!apiKey.trim()) {
+      throw new Error('API Key cannot be empty');
+    }
+
+    try {
+      const query = `'${folderId}' in parents and (mimeType contains 'video/' or mimeType contains 'image/')`;
+      const fields = 'files(id,name,mimeType,createdTime,thumbnailLink,webViewLink)';
+      
+      const url = new URL('https://www.googleapis.com/drive/v3/files');
+      url.searchParams.set('q', query);
+      url.searchParams.set('fields', fields);
+      url.searchParams.set('key', apiKey.trim());
+
+      const folderResponse = await fetch(url.toString(), {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!folderResponse.ok) {
+        let errorMessage = 'Failed to fetch files from Google Drive';
+        try {
+          const errorData = await folderResponse.json();
+          if (errorData.error) {
+            errorMessage = errorData.error.message || errorMessage;
+          }
+        } catch (parseError) {
+          errorMessage = `HTTP ${folderResponse.status}: ${folderResponse.statusText}`;
+        }
+        throw new Error(errorMessage);
+      }
+
+      const folderData = await folderResponse.json();
+      const files = folderData.files || [];
+
+      const transformedFiles = files.map((file) => {
+        const isVideo = file.mimeType?.startsWith('video/') || false;
+        const isImage = file.mimeType?.startsWith('image/') || false;
+        
+        if (!isVideo && !isImage) return null;
+
+        return {
+          id: file.id,
+          filename: file.name,
+          fileType: isVideo ? 'video' : 'image',
+          uploadedAt: file.createdTime || new Date().toISOString(),
+          status: 'pending_review',
+          driveUrl: getDriveFileUrl(file.id),
+          thumbnailUrl: file.thumbnailLink || getDriveThumbnailUrl(file.id, isVideo),
+          embedUrl: getDriveEmbedUrl(file.id, isVideo),
+          mimeType: file.mimeType,
+          captions: generateCaptions(file.name, isVideo)
+        };
+      }).filter(Boolean);
+
+      return transformedFiles;
+    } catch (err) {
+      throw err;
+    }
+  };
+
+  // Generate captions for files
+  const generateCaptions = (filename, isVideo) => {
+    const baseName = filename.replace(/\.[^/.]+$/, '');
+    
+    return [
+      {
+        id: `cap_${Date.now()}_1`,
+        version: 1,
+        tone: 'Professional',
+        content: `📢 ${baseName} - Discover our latest content featuring ${baseName}. Experience quality and innovation. #Content #Marketing`,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: `cap_${Date.now()}_2`,
+        version: 1,
+        tone: 'Casual',
+        content: `Hey! 👋 Check out this awesome ${isVideo ? 'video' : 'image'} - ${baseName}. You're gonna love it! #NewContent`,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: `cap_${Date.now()}_3`,
+        version: 1,
+        tone: 'Engaging',
+        content: `✨ ${baseName} is here! Swipe up to see what's new and exciting. Don't miss out! 🔥 #MustSee #Trending`,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      }
+    ];
+  };
+
+  // Load videos from Google Drive
+  const loadVideos = async () => {
+    if (!driveFolderId || !apiKey) {
+      setError('Please configure Google Drive Folder ID and API Key in settings');
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+      const token = localStorage.getItem('authToken') || 'test-token';
+      
+      try {
+        const envFolderId = getGoogleDriveFolderId();
+        const envApiKey = getGoogleApiKey();
+        
+        const response = await fetch(`${API_BASE_URL}/drive/fetch`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ 
+            folderId: envFolderId.trim(), 
+            apiKey: envApiKey.trim() 
+          }),
+        });
+
+        if (!response.ok) {
+          let errorData;
+          try {
+            errorData = await response.json();
+          } catch (parseError) {
+            const errorText = await response.text();
+            throw new Error(`HTTP ${response.status}: ${response.statusText}\n\n${errorText}`);
+          }
+          
+          let errorMessage = errorData.error || errorData.message || 'Failed to fetch files from Google Drive';
+          throw new Error(errorMessage);
+        }
+
+        let data;
+        try {
+          data = await response.json();
+        } catch (parseError) {
+          throw new Error('Failed to parse backend response: ' + parseError.message);
+        }
+        
+        const files = data.files || [];
+        
+        const filesWithCaptions = files.map(file => ({
+          ...file,
+          captions: generateCaptions(file.filename, file.fileType === 'video')
+        }));
+        
+        setVideos(filesWithCaptions);
+        return;
+      } catch (backendError) {
+        if (backendError.message.includes('Failed to fetch') || 
+            backendError.message.includes('NetworkError') ||
+            backendError.message.includes('ERR_CONNECTION_REFUSED')) {
+          throw new Error(
+            '❌ Cannot connect to backend server!\n\n' +
+            'Please make sure:\n' +
+            '1. Backend server is running: `cd server && npm run dev`\n' +
+            '2. Backend is running on http://localhost:3001\n' +
+            `Tried to connect to: ${API_BASE_URL}/drive/fetch`
+          );
+        }
+        throw backendError;
+      }
+    } catch (err) {
+      const errorMessage = err.message || 'Failed to load files from Google Drive';
+      setError(errorMessage);
+      console.error('Error loading videos:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Auto-load files from Google Drive on dashboard startup
+  useEffect(() => {
+    const envFolderId = getGoogleDriveFolderId();
+    const envApiKey = getGoogleApiKey();
+
+    if (envFolderId && envApiKey) {
+      loadVideos();
+    } else {
+      setError('Please configure Google Drive credentials in .env file:\n\nVITE_GOOGLE_DRIVE_FOLDER_ID=your_folder_id\nVITE_GOOGLE_API_KEY=your_api_key');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const filteredVideos = videos.filter(v => {
+    if (filter === 'pending') return v.status === 'pending_review';
+    if (filter === 'approved') return v.status === 'approved';
+    if (filter === 'published') return v.status === 'published';
+    return true;
+  });
+
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return date.toLocaleDateString();
+  };
+
+  const handleSelectVideo = (video) => {
+    setSelectedVideo(video);
+    setEditingCaption(null);
+  };
+
+  const handleEditCaption = (caption) => {
+    setEditingCaption(caption.id);
+    setEditedText(caption.content);
+  };
+
+  const handleSaveEdit = async (captionId) => {
+    const updatedVideos = videos.map(v => {
+      if (v.id === selectedVideo.id) {
+        return {
+          ...v,
+          captions: v.captions.map(c => {
+            if (c.id === captionId) {
+              return { ...c, content: editedText, version: c.version + 1 };
+            }
+            return c;
+          })
+        };
+      }
+      return v;
+    });
+    
+    setVideos(updatedVideos);
+    setSelectedVideo(updatedVideos.find(v => v.id === selectedVideo.id));
+    setEditingCaption(null);
+  };
+
+  const handleApproveCaption = async (captionId) => {
+    setLoading(true);
+    
+    setTimeout(() => {
+      const updatedVideos = videos.map(v => {
+        if (v.id === selectedVideo.id) {
+          return {
+            ...v,
+            status: 'approved',
+            captions: v.captions.map(c => {
+              if (c.id === captionId) {
+                return { 
+                  ...c, 
+                  status: 'approved',
+                  approvedBy: user?.name || 'Current User',
+                  approvedAt: new Date().toISOString()
+                };
+              }
+              return c;
+            })
+          };
+        }
+        return v;
+      });
+      
+      setVideos(updatedVideos);
+      setSelectedVideo(null);
+      setLoading(false);
+    }, 1000);
+  };
+
+  const getToneColor = (tone) => {
+    const colors = {
+      'Professional': 'bg-blue-500 text-white border-blue-600',
+      'Casual': 'bg-green-500 text-white border-green-600',
+      'Engaging': 'bg-purple-500 text-white border-purple-600'
+    };
+    return colors[tone] || 'bg-gray-500 text-white border-gray-600';
+  };
+
+  return (
+    <div className="min-h-screen bg-brutal-light-bg dark:bg-brutal-dark-bg grid-brutal">
+      {/* Header */}
+      <div className="sticky top-0 z-50 border-b-4 border-black dark:border-white bg-white dark:bg-black shadow-brutal-lg">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center gap-4">
+              <div className="border-4 border-black dark:border-white bg-black dark:bg-white p-3 shadow-brutal">
+                <FileVideo className="w-8 h-8 text-white dark:text-black" />
+              </div>
+              <div>
+                <h1 className="text-3xl md:text-4xl font-black text-black dark:text-white uppercase tracking-tight">
+                  Content Review
+                </h1>
+                <p className="text-sm font-bold text-black dark:text-white opacity-70 uppercase tracking-wider mt-1">
+                  AI-Generated Captions
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                onClick={toggleTheme}
+                className="btn-brutal p-3"
+                aria-label="Toggle theme"
+              >
+                {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+              </button>
+              <button
+                onClick={() => setShowSettings(!showSettings)}
+                className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider"
+              >
+                <Settings className="w-4 h-4 inline mr-2" />
+                Settings
+              </button>
+              <button
+                onClick={loadVideos}
+                disabled={loading}
+                className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 inline mr-2 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+              <button
+                onClick={onLogout}
+                className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider"
+              >
+                <LogOut className="w-4 h-4 inline mr-2" />
+                Logout
+              </button>
+            </div>
+          </div>
+
+          {/* Filter Tabs */}
+          <div className="flex gap-3 mt-4 flex-wrap">
+            <button
+              onClick={() => setFilter('pending')}
+              className={`px-6 py-3 text-sm font-black uppercase tracking-wider border-4 transition-all ${
+                filter === 'pending'
+                  ? 'bg-black dark:bg-white text-white dark:text-black border-black dark:border-white shadow-brutal'
+                  : 'bg-white dark:bg-black text-black dark:text-white border-black dark:border-white shadow-brutal-sm hover:shadow-brutal'
+              }`}
+            >
+              <Clock className="w-4 h-4 inline mr-2" />
+              Pending ({videos.filter(v => v.status === 'pending_review').length})
+            </button>
+            <button
+              onClick={() => setFilter('approved')}
+              className={`px-6 py-3 text-sm font-black uppercase tracking-wider border-4 transition-all ${
+                filter === 'approved'
+                  ? 'bg-black dark:bg-white text-white dark:text-black border-black dark:border-white shadow-brutal'
+                  : 'bg-white dark:bg-black text-black dark:text-white border-black dark:border-white shadow-brutal-sm hover:shadow-brutal'
+              }`}
+            >
+              <CheckCircle className="w-4 h-4 inline mr-2" />
+              Approved ({videos.filter(v => v.status === 'approved').length})
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Settings Panel */}
+      {showSettings && (
+        <div className="max-w-7xl mx-auto px-6 py-6">
+          <div className="card-brutal p-8">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-2xl font-black text-black dark:text-white uppercase tracking-tight">
+                Google Drive Config
+              </h3>
+              <button
+                onClick={() => setShowSettings(false)}
+                className="btn-brutal px-4 py-2 text-sm font-black uppercase"
+              >
+                Close
+              </button>
+            </div>
+            <div className="border-4 border-black dark:border-white bg-white dark:bg-black p-4 mb-6">
+              <p className="text-sm font-bold text-black dark:text-white">
+                📝 Credentials loaded from <code className="bg-black dark:bg-white text-white dark:text-black px-2 py-1">.env</code> file
+              </p>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-black text-black dark:text-white mb-2 uppercase tracking-wide">
+                  Folder ID
+                </label>
+                <input
+                  type="text"
+                  value={driveFolderId}
+                  readOnly
+                  disabled
+                  className="input-brutal w-full px-4 py-3 text-lg opacity-60 cursor-not-allowed"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-black text-black dark:text-white mb-2 uppercase tracking-wide">
+                  API Key
+                </label>
+                <input
+                  type="password"
+                  value={apiKey ? '•'.repeat(Math.min(apiKey.length, 40)) : ''}
+                  readOnly
+                  disabled
+                  className="input-brutal w-full px-4 py-3 text-lg opacity-60 cursor-not-allowed"
+                />
+              </div>
+              <button
+                onClick={loadVideos}
+                disabled={loading}
+                className="btn-brutal-primary w-full px-6 py-4 text-lg uppercase tracking-wider disabled:opacity-50"
+              >
+                {loading ? 'Loading...' : 'Refresh Files'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error Display */}
+      {error && (
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="border-4 border-red-500 bg-red-500 p-6 shadow-brutal">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-6 h-6 text-white flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h4 className="font-black text-white mb-2 uppercase">Error</h4>
+                <p className="text-sm font-bold text-white whitespace-pre-line">{error}</p>
+                <button
+                  onClick={() => setError(null)}
+                  className="mt-4 btn-brutal text-sm font-black uppercase"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Content List */}
+          <div className="lg:col-span-1 space-y-4">
+            <h2 className="text-xl font-black text-black dark:text-white uppercase tracking-tight mb-4">
+              Content Assets
+            </h2>
+            
+            {loading && filteredVideos.length === 0 ? (
+              <div className="card-brutal p-8 text-center">
+                <Loader className="w-8 h-8 text-black dark:text-white animate-spin mx-auto mb-4" />
+                <p className="font-bold text-black dark:text-white">Loading...</p>
+              </div>
+            ) : filteredVideos.length === 0 ? (
+              <div className="card-brutal p-8 text-center">
+                <AlertCircle className="w-12 h-12 text-black dark:text-white mx-auto mb-4" />
+                <p className="font-bold text-black dark:text-white mb-4">No content found</p>
+                <button
+                  onClick={loadVideos}
+                  className="btn-brutal-primary px-6 py-3 uppercase tracking-wider"
+                >
+                  Refresh
+                </button>
+              </div>
+            ) : (
+              filteredVideos.map((video) => (
+                <div
+                  key={video.id}
+                  onClick={() => handleSelectVideo(video)}
+                  className={`card-brutal p-4 cursor-pointer transition-all ${
+                    selectedVideo?.id === video.id
+                      ? 'border-4 border-black dark:border-white shadow-brutal-lg'
+                      : 'hover:shadow-brutal-lg'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="relative border-2 border-black dark:border-white">
+                      <img 
+                        src={video.thumbnailUrl} 
+                        alt={video.filename}
+                        className={`w-20 object-cover ${video.fileType === 'video' ? 'h-14' : 'h-20'}`}
+                      />
+                      <span className={`absolute -top-2 -right-2 border-2 border-black dark:border-white px-2 py-1 text-xs font-black ${
+                        video.fileType === 'video' 
+                          ? 'bg-blue-500 text-white' 
+                          : 'bg-purple-500 text-white'
+                      }`}>
+                        {video.fileType === 'video' ? '▶' : '🖼'}
+                      </span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-black text-sm text-black dark:text-white truncate uppercase">
+                        {video.filename}
+                      </h3>
+                      <p className="text-xs font-bold text-black dark:text-white opacity-70 mt-1">
+                        {formatDate(video.uploadedAt)}
+                      </p>
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        {video.status === 'pending_review' && (
+                          <span className="border-2 border-black dark:border-white bg-yellow-500 text-black dark:text-white px-2 py-1 text-xs font-black uppercase">
+                            Pending
+                          </span>
+                        )}
+                        {video.status === 'approved' && (
+                          <span className="border-2 border-black dark:border-white bg-green-500 text-black dark:text-white px-2 py-1 text-xs font-black uppercase">
+                            Approved
+                          </span>
+                        )}
+                        <span className="text-xs font-bold text-black dark:text-white opacity-70">
+                          {video.captions.length} captions
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Caption Review Panel */}
+          <div className="lg:col-span-2">
+            {!selectedVideo ? (
+              <div className="card-brutal p-12 text-center">
+                <Eye className="w-16 h-16 text-black dark:text-white mx-auto mb-4" />
+                <h3 className="text-2xl font-black text-black dark:text-white uppercase mb-2">
+                  Select Content
+                </h3>
+                <p className="text-sm font-bold text-black dark:text-white opacity-70 uppercase">
+                  Choose a video or image to review captions
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Content Preview */}
+                <div className="card-brutal p-6">
+                  <div className="flex items-start justify-between mb-4 flex-wrap gap-4">
+                    <div>
+                      <div className="flex items-center gap-3 mb-2 flex-wrap">
+                        <h2 className="text-2xl font-black text-black dark:text-white uppercase tracking-tight">
+                          {selectedVideo.filename}
+                        </h2>
+                        <span className={`border-2 border-black dark:border-white px-3 py-1 text-xs font-black uppercase ${getToneColor(selectedVideo.fileType === 'video' ? 'Professional' : 'Casual')}`}>
+                          {selectedVideo.fileType === 'video' ? 'Video' : 'Image'}
+                        </span>
+                      </div>
+                      <p className="text-sm font-bold text-black dark:text-white opacity-70 uppercase">
+                        Uploaded {formatDate(selectedVideo.uploadedAt)}
+                      </p>
+                    </div>
+                    <a
+                      href={selectedVideo.driveUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider"
+                    >
+                      <Eye className="w-4 h-4 inline mr-2" />
+                      View in Drive
+                    </a>
+                  </div>
+                  
+                  {selectedVideo.fileType === 'video' ? (
+                    <div className="border-4 border-black dark:border-white">
+                      <iframe
+                        src={selectedVideo.embedUrl}
+                        className="w-full h-96"
+                        allow="autoplay"
+                        title={selectedVideo.filename}
+                      />
+                    </div>
+                  ) : (
+                    <div className="border-4 border-black dark:border-white">
+                      <img 
+                        src={selectedVideo.embedUrl || selectedVideo.thumbnailUrl} 
+                        alt={selectedVideo.filename}
+                        className="w-full object-contain h-auto max-h-96"
+                        onError={(e) => {
+                          if (e.target.src !== selectedVideo.thumbnailUrl) {
+                            e.target.src = selectedVideo.thumbnailUrl;
+                          }
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Caption Options */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between flex-wrap gap-4">
+                    <h3 className="text-xl font-black text-black dark:text-white uppercase tracking-tight">
+                      AI-Generated Captions
+                    </h3>
+                    <span className="text-sm font-bold text-black dark:text-white opacity-70 uppercase">
+                      Select one to approve or edit
+                    </span>
+                  </div>
+
+                  {selectedVideo.captions.map((caption) => (
+                    <div
+                      key={caption.id}
+                      className="card-brutal p-6"
+                    >
+                      <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`border-2 border-black dark:border-white px-3 py-1 text-xs font-black uppercase ${getToneColor(caption.tone)}`}>
+                            {caption.tone}
+                          </span>
+                          {caption.version > 1 && (
+                            <span className="border-2 border-black dark:border-white bg-white dark:bg-black text-black dark:text-white px-2 py-1 text-xs font-black uppercase">
+                              v{caption.version}
+                            </span>
+                          )}
+                          {caption.status === 'approved' && (
+                            <CheckCircle className="w-5 h-5 text-green-500" />
+                          )}
+                        </div>
+                        
+                        {caption.status === 'approved' && (
+                          <div className="text-xs font-bold text-black dark:text-white opacity-70 uppercase">
+                            Approved by {caption.approvedBy}
+                          </div>
+                        )}
+                      </div>
+
+                      {editingCaption === caption.id ? (
+                        <div className="space-y-3">
+                          <textarea
+                            value={editedText}
+                            onChange={(e) => setEditedText(e.target.value)}
+                            className="input-brutal w-full px-4 py-3 text-lg resize-none"
+                            rows={4}
+                          />
+                          <div className="flex gap-3">
+                            <button
+                              onClick={() => handleSaveEdit(caption.id)}
+                              className="btn-brutal-primary px-6 py-3 uppercase tracking-wider"
+                            >
+                              <CheckCircle className="w-4 h-4 inline mr-2" />
+                              Save
+                            </button>
+                            <button
+                              onClick={() => setEditingCaption(null)}
+                              className="btn-brutal px-6 py-3 uppercase tracking-wider"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-black dark:text-white mb-4 leading-relaxed font-medium">
+                            {caption.content}
+                          </p>
+                          
+                          {caption.status !== 'approved' && (
+                            <div className="flex gap-3 flex-wrap">
+                              <button
+                                onClick={() => handleEditCaption(caption)}
+                                className="btn-brutal px-6 py-3 uppercase tracking-wider text-sm"
+                              >
+                                <Edit3 className="w-4 h-4 inline mr-2" />
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => handleApproveCaption(caption.id)}
+                                disabled={loading}
+                                className="btn-brutal-primary px-6 py-3 uppercase tracking-wider text-sm disabled:opacity-50"
+                              >
+                                {loading ? (
+                                  <Loader className="w-4 h-4 inline mr-2 animate-spin" />
+                                ) : (
+                                  <ThumbsUp className="w-4 h-4 inline mr-2" />
+                                )}
+                                Approve & Publish
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Integration Info */}
+                <div className="border-4 border-black dark:border-white bg-white dark:bg-black p-6">
+                  <h4 className="font-black text-black dark:text-white mb-3 uppercase tracking-tight flex items-center gap-2">
+                    <AlertCircle className="w-5 h-5" />
+                    How It Works
+                  </h4>
+                  <ul className="text-sm font-bold text-black dark:text-white space-y-2 uppercase">
+                    <li>• Videos/images trigger AI caption generation</li>
+                    <li>• Review and edit captions to match brand voice</li>
+                    <li>• Approved captions publish to social platforms</li>
+                    <li>• Full audit trail maintained</li>
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ContentReviewDashboard;

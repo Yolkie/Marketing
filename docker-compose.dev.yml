@@ -1,0 +1,88 @@
+version: '3.8'
+
+# Development docker-compose with hot reload and volume mounts
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: marketing-dashboard-db-dev
+    environment:
+      POSTGRES_DB: ${DB_NAME:-marketing_dashboard}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password}
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+      - ./server/database/complete_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./server/database/init_users.sql:/docker-entrypoint-initdb.d/02-users.sql:ro
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - marketing-network-dev
+    restart: unless-stopped
+
+  # Backend API (with hot reload)
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.dev
+    container_name: marketing-dashboard-backend-dev
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-marketing_dashboard}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-dev_password}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:80}
+    ports:
+      - "${BACKEND_PORT:-3001}:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - marketing-network-dev
+    restart: unless-stopped
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Frontend (with hot reload)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: marketing-dashboard-frontend-dev
+    environment:
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:3001/api}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - backend
+    networks:
+      - marketing-network-dev
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/dist
+
+volumes:
+  postgres_data_dev:
+    driver: local
+
+networks:
+  marketing-network-dev:
+    driver: bridge
+
