@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "Frontend for Marketing Dashboard - Content Workflow Platform",
   "private": true,
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

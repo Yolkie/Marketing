@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "Backend API for Marketing Dashboard with authentication and webhooks",
   "main": "index.js",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",

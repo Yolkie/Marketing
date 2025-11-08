@@ -51,9 +51,10 @@ services:
     networks:
       - marketing-network
     restart: unless-stopped
-    volumes:
-      - ./server:/app
-      - /app/node_modules
+    # Remove volume mounts for production - use built image
+    # volumes:
+    #   - ./server:/app
+    #   - /app/node_modules
 
   # Frontend
   frontend:
