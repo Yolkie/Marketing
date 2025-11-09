@@ -557,47 +557,125 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
                   </div>
                   
                   {selectedVideo.fileType === 'video' ? (
-                    <div className="border-4 border-black dark:border-white">
-                      <iframe
-                        src={selectedVideo.embedUrl}
-                        className="w-full h-96"
-                        allow="autoplay"
-                        title={selectedVideo.filename}
-                      />
+                    <div className="border-4 border-black dark:border-white bg-gray-100 dark:bg-gray-900 min-h-[400px] flex items-center justify-center">
+                      {(() => {
+                        // Generate preview URL with fallbacks
+                        let previewUrl = selectedVideo.embedUrl;
+                        if (!previewUrl && selectedVideo.driveFileId) {
+                          previewUrl = `https://drive.google.com/file/d/${selectedVideo.driveFileId}/preview`;
+                        } else if (!previewUrl && selectedVideo.driveUrl) {
+                          previewUrl = selectedVideo.driveUrl.replace('/view', '/preview');
+                        }
+                        
+                        return previewUrl ? (
+                          <iframe
+                            key={previewUrl}
+                            src={previewUrl}
+                            className="w-full h-96"
+                            allow="autoplay; fullscreen"
+                            title={selectedVideo.filename}
+                            style={{ minHeight: '400px' }}
+                          />
+                        ) : (
+                          <div className="text-center p-8">
+                            <p className="text-black dark:text-white font-bold mb-4">Preview not available</p>
+                            <p className="text-gray-600 dark:text-gray-400 text-sm mb-4">
+                              Unable to generate preview URL. The file may not be publicly accessible.
+                            </p>
+                            {selectedVideo.driveUrl && (
+                              <a
+                                href={selectedVideo.driveUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider inline-block"
+                              >
+                                <Eye className="w-4 h-4 inline mr-2" />
+                                Open in Google Drive
+                              </a>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   ) : (
-                    <div className="border-4 border-black dark:border-white">
-                      <img 
-                        src={selectedVideo.embedUrl || selectedVideo.thumbnailUrl || (selectedVideo.driveFileId ? (selectedVideo.fileType === 'video' ? `https://drive.google.com/file/d/${selectedVideo.driveFileId}/preview` : `https://drive.google.com/uc?export=view&id=${selectedVideo.driveFileId}`) : '')} 
-                        alt={selectedVideo.filename}
-                        className="w-full object-contain h-auto max-h-96"
-                        onError={(e) => {
-                          // Try thumbnail first
-                          if (selectedVideo.thumbnailUrl && e.target.src !== selectedVideo.thumbnailUrl) {
-                            e.target.src = selectedVideo.thumbnailUrl;
-                          } 
-                          // Then try generating from driveFileId
-                          else if (selectedVideo.driveFileId) {
-                            const fallbackUrl = selectedVideo.fileType === 'video'
-                              ? `https://drive.google.com/file/d/${selectedVideo.driveFileId}/preview`
-                              : `https://drive.google.com/uc?export=view&id=${selectedVideo.driveFileId}`;
-                            if (e.target.src !== fallbackUrl) {
-                              e.target.src = fallbackUrl;
-                            }
-                          }
-                          // Last resort: extract from driveUrl
-                          else if (selectedVideo.driveUrl) {
-                            const match = selectedVideo.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
-                            if (match) {
-                              const driveId = match[1];
-                              const finalUrl = selectedVideo.fileType === 'video'
-                                ? `https://drive.google.com/file/d/${driveId}/preview`
-                                : `https://drive.google.com/uc?export=view&id=${driveId}`;
-                              e.target.src = finalUrl;
-                            }
-                          }
-                        }}
-                      />
+                    <div className="border-4 border-black dark:border-white bg-gray-100 dark:bg-gray-900 min-h-[400px] flex items-center justify-center">
+                      {(() => {
+                        // Generate image URL with fallbacks
+                        let imageUrl = selectedVideo.embedUrl || selectedVideo.thumbnailUrl;
+                        if (!imageUrl && selectedVideo.driveFileId) {
+                          imageUrl = `https://drive.google.com/uc?export=view&id=${selectedVideo.driveFileId}`;
+                        }
+                        
+                        return imageUrl ? (
+                          <img 
+                            key={imageUrl}
+                            src={imageUrl}
+                            alt={selectedVideo.filename}
+                            className="w-full object-contain h-auto max-h-96"
+                            onError={(e) => {
+                              // Try thumbnail first
+                              if (selectedVideo.thumbnailUrl && e.target.src !== selectedVideo.thumbnailUrl) {
+                                e.target.src = selectedVideo.thumbnailUrl;
+                              } 
+                              // Then try generating from driveFileId with different formats
+                              else if (selectedVideo.driveFileId) {
+                                const currentSrc = e.target.src;
+                                // Try alternative URL format
+                                if (!currentSrc.includes('thumbnail')) {
+                                  e.target.src = `https://drive.google.com/thumbnail?id=${selectedVideo.driveFileId}&sz=w1000`;
+                                } else if (!currentSrc.includes('uc?export')) {
+                                  e.target.src = `https://drive.google.com/uc?export=view&id=${selectedVideo.driveFileId}`;
+                                } else {
+                                  // All fallbacks failed, show placeholder
+                                  e.target.style.display = 'none';
+                                  const parent = e.target.parentElement;
+                                  if (parent && !parent.querySelector('.preview-error')) {
+                                    const errorDiv = document.createElement('div');
+                                    errorDiv.className = 'preview-error text-center p-8';
+                                    errorDiv.innerHTML = `
+                                      <p class="text-black dark:text-white font-bold mb-4">Preview not available</p>
+                                      <p class="text-gray-600 dark:text-gray-400 text-sm mb-4">
+                                        Unable to load image preview. The file may not be publicly accessible.
+                                      </p>
+                                      ${selectedVideo.driveUrl ? `<a href="${selectedVideo.driveUrl}" target="_blank" rel="noopener noreferrer" class="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider inline-block">
+                                        <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                                        Open in Google Drive
+                                      </a>` : ''}
+                                    `;
+                                    parent.appendChild(errorDiv);
+                                  }
+                                }
+                              }
+                              // Last resort: extract from driveUrl
+                              else if (selectedVideo.driveUrl) {
+                                const match = selectedVideo.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+                                if (match) {
+                                  const driveId = match[1];
+                                  e.target.src = `https://drive.google.com/uc?export=view&id=${driveId}`;
+                                }
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div className="text-center p-8">
+                            <p className="text-black dark:text-white font-bold mb-4">Preview not available</p>
+                            <p className="text-gray-600 dark:text-gray-400 text-sm mb-4">
+                              Unable to generate preview URL. The file may not be publicly accessible.
+                            </p>
+                            {selectedVideo.driveUrl && (
+                              <a
+                                href={selectedVideo.driveUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider inline-block"
+                              >
+                                <Eye className="w-4 h-4 inline mr-2" />
+                                Open in Google Drive
+                              </a>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
