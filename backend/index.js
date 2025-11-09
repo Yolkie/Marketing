@@ -8,8 +8,7 @@ require('dotenv').config();
 // Import middleware
 const { apiLimiter, authLimiter, securityHeaders, corsOptions } = require('./middleware/security');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
-const adminAuth = require('./middleware/adminAuth');
-const { requireAdmin } = adminAuth;
+const { requireAdmin, setPool: setAdminAuthPool } = require('./middleware/adminAuth');
 const {
   validateRegister,
   validateLogin,
@@ -97,7 +96,7 @@ if (process.env.DB_SSL === 'true' || process.env.DB_SSL === '1') {
 const pool = new Pool(poolConfig);
 
 // Set pool in adminAuth middleware
-adminAuth.setPool(pool);
+setAdminAuthPool(pool);
 
 // Handle pool errors (connection errors, etc.)
 pool.on('error', (err, client) => {

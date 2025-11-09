@@ -20,6 +20,13 @@ const requireAdmin = async (req, res, next) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
+    if (!pool) {
+      return res.status(500).json({ 
+        error: 'Server configuration error',
+        message: 'Database pool not initialized'
+      });
+    }
+
     // Get user role from database
     const result = await pool.query(
       'SELECT role FROM users WHERE id = $1',
@@ -51,5 +58,5 @@ const requireAdmin = async (req, res, next) => {
   }
 };
 
-module.exports = { requireAdmin };
+module.exports = { requireAdmin, setPool };
 
