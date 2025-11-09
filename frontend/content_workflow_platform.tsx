@@ -150,19 +150,43 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
         const contentItems = data.content || [];
         
         // Transform to match expected format (captions are already included from database)
-        const formattedContent = contentItems.map(item => ({
-          id: item.id,
-          filename: item.filename,
-          fileType: item.fileType,
-          uploadedAt: item.uploadedAt,
-          status: item.status,
-          driveUrl: item.driveUrl,
-          thumbnailUrl: item.thumbnailUrl,
-          embedUrl: item.embedUrl,
-          mimeType: item.mimeType,
-          // Captions are already loaded from database via content_item_id
-          captions: item.captions || []
-        }));
+        const formattedContent = contentItems.map(item => {
+          // Extract drive_file_id from driveUrl if not provided
+          let driveFileId = item.driveFileId;
+          if (!driveFileId && item.driveUrl) {
+            const match = item.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+            if (match) driveFileId = match[1];
+          }
+          
+          // Generate thumbnail URL from drive_file_id if missing
+          let thumbnailUrl = item.thumbnailUrl;
+          if (!thumbnailUrl && driveFileId) {
+            thumbnailUrl = `https://drive.google.com/thumbnail?id=${driveFileId}&sz=w1000`;
+          }
+          
+          // Generate embed URL if missing
+          let embedUrl = item.embedUrl;
+          if (!embedUrl && driveFileId) {
+            embedUrl = item.fileType === 'video'
+              ? `https://drive.google.com/file/d/${driveFileId}/preview`
+              : `https://drive.google.com/uc?export=view&id=${driveFileId}`;
+          }
+          
+          return {
+            id: item.id,
+            filename: item.filename,
+            fileType: item.fileType,
+            uploadedAt: item.uploadedAt,
+            status: item.status,
+            driveUrl: item.driveUrl,
+            thumbnailUrl: thumbnailUrl,
+            embedUrl: embedUrl,
+            mimeType: item.mimeType,
+            driveFileId: driveFileId, // Store for fallback
+            // Captions are already loaded from database via content_item_id
+            captions: item.captions || []
+          };
+        });
         
         setVideos(formattedContent);
         return;
@@ -438,9 +462,21 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
                   <div className="flex items-start gap-3">
                     <div className="relative border-2 border-black dark:border-white">
                       <img 
-                        src={video.thumbnailUrl} 
+                        src={video.thumbnailUrl || (video.driveFileId ? `https://drive.google.com/thumbnail?id=${video.driveFileId}&sz=w400` : '')} 
                         alt={video.filename}
                         className={`w-20 object-cover ${video.fileType === 'video' ? 'h-14' : 'h-20'}`}
+                        onError={(e) => {
+                          // Fallback: generate thumbnail from driveFileId if image fails to load
+                          if (video.driveFileId && e.target.src !== `https://drive.google.com/thumbnail?id=${video.driveFileId}&sz=w400`) {
+                            e.target.src = `https://drive.google.com/thumbnail?id=${video.driveFileId}&sz=w400`;
+                          } else if (!video.driveFileId && video.driveUrl) {
+                            // Extract drive_file_id from driveUrl as last resort
+                            const match = video.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+                            if (match) {
+                              e.target.src = `https://drive.google.com/thumbnail?id=${match[1]}&sz=w400`;
+                            }
+                          }
+                        }}
                       />
                       <span className={`absolute -top-2 -right-2 border-2 border-black dark:border-white px-2 py-1 text-xs font-black ${
                         video.fileType === 'video' 
@@ -532,12 +568,33 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
                   ) : (
                     <div className="border-4 border-black dark:border-white">
                       <img 
-                        src={selectedVideo.embedUrl || selectedVideo.thumbnailUrl} 
+                        src={selectedVideo.embedUrl || selectedVideo.thumbnailUrl || (selectedVideo.driveFileId ? (selectedVideo.fileType === 'video' ? `https://drive.google.com/file/d/${selectedVideo.driveFileId}/preview` : `https://drive.google.com/uc?export=view&id=${selectedVideo.driveFileId}`) : '')} 
                         alt={selectedVideo.filename}
                         className="w-full object-contain h-auto max-h-96"
                         onError={(e) => {
-                          if (e.target.src !== selectedVideo.thumbnailUrl) {
+                          // Try thumbnail first
+                          if (selectedVideo.thumbnailUrl && e.target.src !== selectedVideo.thumbnailUrl) {
                             e.target.src = selectedVideo.thumbnailUrl;
+                          } 
+                          // Then try generating from driveFileId
+                          else if (selectedVideo.driveFileId) {
+                            const fallbackUrl = selectedVideo.fileType === 'video'
+                              ? `https://drive.google.com/file/d/${selectedVideo.driveFileId}/preview`
+                              : `https://drive.google.com/uc?export=view&id=${selectedVideo.driveFileId}`;
+                            if (e.target.src !== fallbackUrl) {
+                              e.target.src = fallbackUrl;
+                            }
+                          }
+                          // Last resort: extract from driveUrl
+                          else if (selectedVideo.driveUrl) {
+                            const match = selectedVideo.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+                            if (match) {
+                              const driveId = match[1];
+                              const finalUrl = selectedVideo.fileType === 'video'
+                                ? `https://drive.google.com/file/d/${driveId}/preview`
+                                : `https://drive.google.com/uc?export=view&id=${driveId}`;
+                              e.target.src = finalUrl;
+                            }
                           }
                         }}
                       />

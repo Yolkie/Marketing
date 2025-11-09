@@ -396,6 +396,7 @@ app.get('/api/content', apiLimiter, authenticateToken, async (req, res) => {
     let query = `
       SELECT 
         c.*,
+        c.drive_file_id,
         json_agg(
           json_build_object(
             'id', cap.id,
@@ -431,19 +432,39 @@ app.get('/api/content', apiLimiter, authenticateToken, async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    // Transform results
-    const contentItems = result.rows.map(row => ({
-      id: row.id,
-      filename: row.filename,
-      fileType: row.file_type,
-      uploadedAt: row.uploaded_at,
-      status: row.status,
-      driveUrl: row.drive_url,
-      thumbnailUrl: row.thumbnail_url,
-      embedUrl: row.embed_url,
-      mimeType: row.mime_type,
-      captions: row.captions || [],
-    }));
+    // Transform results - generate thumbnail URL from drive_file_id if missing
+    const contentItems = result.rows.map(row => {
+      const driveFileId = row.drive_file_id;
+      const isVideo = row.file_type === 'video';
+      
+      // Generate thumbnail URL from drive_file_id if thumbnail_url is missing or empty
+      let thumbnailUrl = row.thumbnail_url;
+      if (!thumbnailUrl && driveFileId) {
+        thumbnailUrl = `https://drive.google.com/thumbnail?id=${driveFileId}&sz=w1000`;
+      }
+      
+      // Generate embed URL if missing
+      let embedUrl = row.embed_url;
+      if (!embedUrl && driveFileId) {
+        embedUrl = isVideo 
+          ? `https://drive.google.com/file/d/${driveFileId}/preview`
+          : `https://drive.google.com/uc?export=view&id=${driveFileId}`;
+      }
+      
+      return {
+        id: row.id,
+        filename: row.filename,
+        fileType: row.file_type,
+        uploadedAt: row.uploaded_at,
+        status: row.status,
+        driveUrl: row.drive_url,
+        thumbnailUrl: thumbnailUrl,
+        embedUrl: embedUrl,
+        mimeType: row.mime_type,
+        driveFileId: driveFileId, // Include for frontend fallback
+        captions: row.captions || [],
+      };
+    });
 
     res.json({ content: contentItems });
   } catch (error) {
@@ -460,6 +481,7 @@ app.get('/api/content/:id', apiLimiter, authenticateToken, validateUUIDParam('id
     const result = await pool.query(
       `SELECT 
         c.*,
+        c.drive_file_id,
         json_agg(
           json_build_object(
             'id', cap.id,
@@ -484,6 +506,23 @@ app.get('/api/content/:id', apiLimiter, authenticateToken, validateUUIDParam('id
     }
 
     const row = result.rows[0];
+    const driveFileId = row.drive_file_id;
+    const isVideo = row.file_type === 'video';
+    
+    // Generate thumbnail URL from drive_file_id if thumbnail_url is missing or empty
+    let thumbnailUrl = row.thumbnail_url;
+    if (!thumbnailUrl && driveFileId) {
+      thumbnailUrl = `https://drive.google.com/thumbnail?id=${driveFileId}&sz=w1000`;
+    }
+    
+    // Generate embed URL if missing
+    let embedUrl = row.embed_url;
+    if (!embedUrl && driveFileId) {
+      embedUrl = isVideo 
+        ? `https://drive.google.com/file/d/${driveFileId}/preview`
+        : `https://drive.google.com/uc?export=view&id=${driveFileId}`;
+    }
+    
     const contentItem = {
       id: row.id,
       filename: row.filename,
@@ -491,9 +530,10 @@ app.get('/api/content/:id', apiLimiter, authenticateToken, validateUUIDParam('id
       uploadedAt: row.uploaded_at,
       status: row.status,
       driveUrl: row.drive_url,
-      thumbnailUrl: row.thumbnail_url,
-      embedUrl: row.embed_url,
+      thumbnailUrl: thumbnailUrl,
+      embedUrl: embedUrl,
       mimeType: row.mime_type,
+      driveFileId: driveFileId, // Include for frontend fallback
       captions: row.captions || [],
     };
 
