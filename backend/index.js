@@ -178,6 +178,38 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Middleware that accepts either JWT token OR webhook secret
+// Useful for endpoints that need to work with both user authentication and service-to-service calls
+const authenticateTokenOrWebhook = (req, res, next) => {
+  // Check for webhook secret first (for n8n/service calls)
+  const webhookSecret = req.headers['x-webhook-secret'];
+  if (process.env.WEBHOOK_SECRET && webhookSecret === process.env.WEBHOOK_SECRET) {
+    // Valid webhook secret - treat as service call
+    req.user = { userId: 'service', email: 'service@n8n', isService: true };
+    return next();
+  }
+
+  // Fall back to JWT token authentication (for user calls)
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token or webhook secret required' });
+  }
+
+  if (!process.env.JWT_SECRET) {
+    return res.status(500).json({ error: 'Server configuration error' });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+};
+
 // ==================== AUTHENTICATION ROUTES ====================
 
 // Registration removed - users must be created by admin
@@ -688,7 +720,7 @@ app.post('/api/drive/fetch', apiLimiter, authenticateToken, async (req, res) => 
 });
 
 // Sync content from Google Drive
-app.post('/api/content/sync', apiLimiter, authenticateToken, validateContentSync, async (req, res) => {
+app.post('/api/content/sync', apiLimiter, authenticateTokenOrWebhook, validateContentSync, async (req, res) => {
   try {
     // This endpoint accepts content items to sync (settings loaded from database)
     const { contentItems } = req.body;

@@ -72,18 +72,32 @@ const validateUUIDParam = (paramName = 'id') => {
 
 // Validate content sync input
 const validateContentSync = (req, res, next) => {
-  const { folderId, apiKey, contentItems } = req.body;
+  const { contentItems } = req.body;
 
-  if (!folderId || !apiKey) {
-    return res.status(400).json({ error: 'Folder ID and API Key are required' });
+  // contentItems is required for this endpoint
+  if (!contentItems) {
+    return res.status(400).json({ error: 'Content items array is required' });
   }
 
-  if (contentItems && !Array.isArray(contentItems)) {
+  if (!Array.isArray(contentItems)) {
     return res.status(400).json({ error: 'Content items must be an array' });
   }
 
-  if (contentItems && contentItems.length > 100) {
+  if (contentItems.length === 0) {
+    return res.status(400).json({ error: 'Content items array cannot be empty' });
+  }
+
+  if (contentItems.length > 100) {
     return res.status(400).json({ error: 'Cannot sync more than 100 items at once' });
+  }
+
+  // Validate each content item structure
+  for (const item of contentItems) {
+    if (!item.id || !item.filename || !item.fileType) {
+      return res.status(400).json({ 
+        error: 'Each content item must have id, filename, and fileType' 
+      });
+    }
   }
 
   next();
