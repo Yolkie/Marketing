@@ -8,7 +8,7 @@ import { useTheme } from './src/contexts/ThemeContext.jsx';
 const getGoogleDriveFolderId = () => import.meta.env.VITE_GOOGLE_DRIVE_FOLDER_ID || '';
 const getGoogleApiKey = () => import.meta.env.VITE_GOOGLE_API_KEY || '';
 
-const ContentReviewDashboard = ({ user, onLogout }) => {
+const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, isAdmin = false }) => {
   const { theme, toggleTheme } = useTheme();
   const [videos, setVideos] = useState([]);
   const [selectedVideo, setSelectedVideo] = useState(null);
@@ -359,13 +359,25 @@ const ContentReviewDashboard = ({ user, onLogout }) => {
               >
                 {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
               </button>
-              <button
-                onClick={() => setShowSettings(!showSettings)}
-                className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider"
-              >
-                <Settings className="w-4 h-4 inline mr-2" />
-                Settings
-              </button>
+              {isAdmin && onSettingsClick ? (
+                <button
+                  onClick={onSettingsClick}
+                  className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider"
+                  title="Admin Settings (Database)"
+                >
+                  <Settings className="w-4 h-4 inline mr-2" />
+                  Admin Settings
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowSettings(!showSettings)}
+                  className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider"
+                  title="Local Settings (.env)"
+                >
+                  <Settings className="w-4 h-4 inline mr-2" />
+                  Settings
+                </button>
+              )}
               <button
                 onClick={loadVideos}
                 disabled={loading}

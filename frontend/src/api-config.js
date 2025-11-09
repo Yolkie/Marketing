@@ -165,6 +165,36 @@ export const api = {
     }
     return response.json();
   },
+
+  // Settings (Admin only)
+  async getSettings() {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/settings`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to fetch settings');
+    }
+    return response.json();
+  },
+
+  async updateSettings(settings) {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/settings`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(settings),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to update settings');
+    }
+    return response.json();
+  },
 };
 
 

@@ -8,6 +8,8 @@ require('dotenv').config();
 // Import middleware
 const { apiLimiter, authLimiter, securityHeaders, corsOptions } = require('./middleware/security');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+const adminAuth = require('./middleware/adminAuth');
+const { requireAdmin } = adminAuth;
 const {
   validateRegister,
   validateLogin,
@@ -93,6 +95,9 @@ if (process.env.DB_SSL === 'true' || process.env.DB_SSL === '1') {
 }
 
 const pool = new Pool(poolConfig);
+
+// Set pool in adminAuth middleware
+adminAuth.setPool(pool);
 
 // Handle pool errors (connection errors, etc.)
 pool.on('error', (err, client) => {
@@ -389,7 +394,7 @@ app.post('/api/auth/login', authLimiter, validateLogin, async (req, res) => {
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, email, name, created_at FROM users WHERE id = $1',
+      'SELECT id, email, name, role, created_at FROM users WHERE id = $1',
       [req.user.userId]
     );
 
@@ -1204,6 +1209,76 @@ app.post('/api/webhooks/n8n', async (req, res) => {
       error: 'Internal server error',
       message: error.message 
     });
+  }
+});
+
+// ==================== SETTINGS ROUTES (Admin Only) ====================
+
+// Get all settings (admin only)
+app.get('/api/settings', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT key, value, description, updated_at FROM settings ORDER BY key'
+    );
+
+    // Convert array to object for easier frontend use
+    const settings = {};
+    result.rows.forEach(row => {
+      settings[row.key] = {
+        value: row.value,
+        description: row.description,
+        updatedAt: row.updated_at
+      };
+    });
+
+    res.json({ settings });
+  } catch (error) {
+    console.error('Get settings error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update settings (admin only)
+app.put('/api/settings', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { google_drive_folder_id, google_drive_api_key } = req.body;
+
+    if (google_drive_folder_id !== undefined) {
+      await pool.query(
+        'UPDATE settings SET value = $1, updated_by = $2, updated_at = CURRENT_TIMESTAMP WHERE key = $3',
+        [google_drive_folder_id || '', req.user.userId, 'google_drive_folder_id']
+      );
+    }
+
+    if (google_drive_api_key !== undefined) {
+      await pool.query(
+        'UPDATE settings SET value = $1, updated_by = $2, updated_at = CURRENT_TIMESTAMP WHERE key = $3',
+        [google_drive_api_key || '', req.user.userId, 'google_drive_api_key']
+      );
+    }
+
+    // Return updated settings
+    const result = await pool.query(
+      'SELECT key, value, description, updated_at FROM settings WHERE key IN ($1, $2)',
+      ['google_drive_folder_id', 'google_drive_api_key']
+    );
+
+    const settings = {};
+    result.rows.forEach(row => {
+      settings[row.key] = {
+        value: row.value,
+        description: row.description,
+        updatedAt: row.updated_at
+      };
+    });
+
+    res.json({ 
+      message: 'Settings updated successfully',
+      settings 
+    });
+  } catch (error) {
+    console.error('Update settings error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

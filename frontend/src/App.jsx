@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import LoginComponent from './components/LoginComponent';
 import ContentReviewDashboard from './components/ContentReviewDashboard';
+import Settings from './components/Settings';
 import { api } from './api-config';
 import { ThemeProvider } from './contexts/ThemeContext';
 
@@ -9,6 +10,7 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('authToken'));
   const [loading, setLoading] = useState(true);
+  const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard' or 'settings'
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -16,7 +18,10 @@ const App = () => {
         try {
           const data = await api.getCurrentUser();
           if (data && data.user) {
+            // Use role from API response (includes role from database)
             setUser(data.user);
+            // Update localStorage with full user data including role
+            localStorage.setItem('user', JSON.stringify(data.user));
           } else {
             localStorage.removeItem('authToken');
             setToken(null);
@@ -38,6 +43,7 @@ const App = () => {
     setToken(authToken);
     localStorage.setItem('authToken', authToken);
     localStorage.setItem('user', JSON.stringify(userData));
+    setCurrentView('dashboard');
   };
 
   const handleLogout = () => {
@@ -45,7 +51,11 @@ const App = () => {
     setToken(null);
     localStorage.removeItem('authToken');
     localStorage.removeItem('user');
+    setCurrentView('dashboard');
   };
+
+  // Check if user is admin
+  const isAdmin = user?.role === 'admin';
 
   if (loading) {
     return (
@@ -64,8 +74,18 @@ const App = () => {
     <ThemeProvider>
       {!user ? (
         <LoginComponent onLogin={handleLogin} />
+      ) : currentView === 'settings' && isAdmin ? (
+        <Settings 
+          user={user} 
+          onBack={() => setCurrentView('dashboard')} 
+        />
       ) : (
-        <ContentReviewDashboard user={user} onLogout={handleLogout} />
+        <ContentReviewDashboard 
+          user={user} 
+          onLogout={handleLogout}
+          onSettingsClick={() => isAdmin && setCurrentView('settings')}
+          isAdmin={isAdmin}
+        />
       )}
     </ThemeProvider>
   );
