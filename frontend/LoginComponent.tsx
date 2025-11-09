@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
-import { LogIn, UserPlus, AlertCircle, Loader, Moon, Sun } from 'lucide-react';
+import { LogIn, AlertCircle, Loader, Moon, Sun } from 'lucide-react';
 import { useTheme } from './src/contexts/ThemeContext.jsx';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
 const LoginComponent = ({ onLogin }) => {
   const { theme, toggleTheme } = useTheme();
-  const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -20,15 +18,11 @@ const LoginComponent = ({ onLogin }) => {
 
     try {
       const response = await fetch(
-        `${API_BASE_URL}/auth/${isLogin ? 'login' : 'register'}`,
+        `${API_BASE_URL}/auth/login`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(
-            isLogin
-              ? { email, password }
-              : { email, password, name: name || email.split('@')[0] }
-          ),
+          body: JSON.stringify({ email, password }),
         }
       );
 
@@ -77,11 +71,11 @@ const LoginComponent = ({ onLogin }) => {
               </div>
             </div>
             <h1 className="text-4xl md:text-5xl font-black text-black dark:text-white mb-3 tracking-tight">
-              {isLogin ? 'WELCOME BACK' : 'GET STARTED'}
+              WELCOME BACK
             </h1>
             <div className="border-2 border-black dark:border-white bg-white dark:bg-black px-4 py-2 inline-block">
               <p className="text-sm font-bold text-black dark:text-white uppercase tracking-wider">
-                {isLogin ? 'Sign in to continue' : 'Create your account'}
+                Sign in to continue
               </p>
             </div>
           </div>
@@ -98,21 +92,6 @@ const LoginComponent = ({ onLogin }) => {
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-6">
-            {!isLogin && (
-              <div>
-                <label className="block text-sm font-black text-black dark:text-white mb-2 uppercase tracking-wide">
-                  Name
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Your name"
-                  className="input-brutal w-full px-4 py-3 text-lg"
-                />
-              </div>
-            )}
-
             <div>
               <label className="block text-sm font-black text-black dark:text-white mb-2 uppercase tracking-wide">
                 Email
@@ -150,29 +129,16 @@ const LoginComponent = ({ onLogin }) => {
               {loading ? (
                 <>
                   <Loader className="w-5 h-5 animate-spin" />
-                  <span>{isLogin ? 'SIGNING IN...' : 'CREATING...'}</span>
+                  <span>SIGNING IN...</span>
                 </>
               ) : (
                 <>
-                  {isLogin ? <LogIn className="w-5 h-5" /> : <UserPlus className="w-5 h-5" />}
-                  <span>{isLogin ? 'SIGN IN' : 'CREATE ACCOUNT'}</span>
+                  <LogIn className="w-5 h-5" />
+                  <span>SIGN IN</span>
                 </>
               )}
             </button>
           </form>
-
-          {/* Toggle Login/Register */}
-          <div className="mt-8 pt-8 border-t-4 border-black dark:border-white">
-            <button
-              onClick={() => {
-                setIsLogin(!isLogin);
-                setError(null);
-              }}
-              className="w-full btn-brutal py-3 text-sm font-black uppercase tracking-wider"
-            >
-              {isLogin ? 'CREATE ACCOUNT →' : 'SIGN IN →'}
-            </button>
-          </div>
         </div>
 
         {/* Decorative Elements */}

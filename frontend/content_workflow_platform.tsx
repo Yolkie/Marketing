@@ -1,14 +1,9 @@
 import { useState, useEffect } from 'react';
-import { FileVideo, Clock, CheckCircle, Edit3, Loader, Eye, ThumbsUp, AlertCircle, Settings, Moon, Sun, LogOut, RefreshCw } from 'lucide-react';
+import { FileVideo, Clock, CheckCircle, Edit3, Loader, Eye, ThumbsUp, AlertCircle, Settings, Moon, Sun, LogOut, RefreshCw, Users } from 'lucide-react';
 import { useTheme } from './src/contexts/ThemeContext.jsx';
+import { api } from './src/api-config.js';
 
-// Configuration - Set your Google Drive folder ID here
-// Vite uses import.meta.env instead of process.env
-// These are read from .env file and persist across sessions
-const getGoogleDriveFolderId = () => import.meta.env.VITE_GOOGLE_DRIVE_FOLDER_ID || '';
-const getGoogleApiKey = () => import.meta.env.VITE_GOOGLE_API_KEY || '';
-
-const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, isAdmin = false }) => {
+const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick, isAdmin = false }) => {
   const { theme, toggleTheme } = useTheme();
   const [videos, setVideos] = useState([]);
   const [selectedVideo, setSelectedVideo] = useState(null);
@@ -16,11 +11,6 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, isAdmin = fal
   const [editedText, setEditedText] = useState('');
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('pending');
-  // Always read from environment variables (from .env file)
-  // These persist across sessions and don't reset
-  const driveFolderId = getGoogleDriveFolderId();
-  const apiKey = getGoogleApiKey();
-  const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState(null);
 
   // Google Drive API helper functions
@@ -145,35 +135,28 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, isAdmin = fal
     ];
   };
 
-  // Load videos from Google Drive
+  // Load videos from Google Drive (using database settings)
   const loadVideos = async () => {
-    if (!driveFolderId || !apiKey) {
-      setError('Please configure Google Drive Folder ID and API Key in settings');
-      setLoading(false);
-      return;
-    }
-
     setLoading(true);
     setError(null);
 
     try {
       const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
-      const token = localStorage.getItem('authToken') || 'test-token';
+      const token = localStorage.getItem('authToken');
+      
+      if (!token) {
+        throw new Error('Authentication required');
+      }
       
       try {
-        const envFolderId = getGoogleDriveFolderId();
-        const envApiKey = getGoogleApiKey();
-        
+        // Backend now loads settings from database automatically
         const response = await fetch(`${API_BASE_URL}/drive/fetch`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ 
-            folderId: envFolderId.trim(), 
-            apiKey: envApiKey.trim() 
-          }),
+          // No body needed - backend loads from database
         });
 
         if (!response.ok) {
@@ -230,14 +213,7 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, isAdmin = fal
 
   // Auto-load files from Google Drive on dashboard startup
   useEffect(() => {
-    const envFolderId = getGoogleDriveFolderId();
-    const envApiKey = getGoogleApiKey();
-
-    if (envFolderId && envApiKey) {
-      loadVideos();
-    } else {
-      setError('Please configure Google Drive credentials in .env file:\n\nVITE_GOOGLE_DRIVE_FOLDER_ID=your_folder_id\nVITE_GOOGLE_API_KEY=your_api_key');
-    }
+    loadVideos();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -359,23 +335,24 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, isAdmin = fal
               >
                 {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
               </button>
-              {isAdmin && onSettingsClick ? (
+              {isAdmin && onSettingsClick && (
                 <button
                   onClick={onSettingsClick}
                   className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider"
-                  title="Admin Settings (Database)"
-                >
-                  <Settings className="w-4 h-4 inline mr-2" />
-                  Admin Settings
-                </button>
-              ) : (
-                <button
-                  onClick={() => setShowSettings(!showSettings)}
-                  className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider"
-                  title="Local Settings (.env)"
+                  title="Admin Settings"
                 >
                   <Settings className="w-4 h-4 inline mr-2" />
                   Settings
+                </button>
+              )}
+              {isAdmin && onUsersClick && (
+                <button
+                  onClick={onUsersClick}
+                  className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider"
+                  title="User Management"
+                >
+                  <Users className="w-4 h-4 inline mr-2" />
+                  Users
                 </button>
               )}
               <button
@@ -423,63 +400,6 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, isAdmin = fal
           </div>
         </div>
       </div>
-
-      {/* Settings Panel */}
-      {showSettings && (
-        <div className="max-w-7xl mx-auto px-6 py-6">
-          <div className="card-brutal p-8">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-2xl font-black text-black dark:text-white uppercase tracking-tight">
-                Google Drive Config
-              </h3>
-              <button
-                onClick={() => setShowSettings(false)}
-                className="btn-brutal px-4 py-2 text-sm font-black uppercase"
-              >
-                Close
-              </button>
-            </div>
-            <div className="border-4 border-black dark:border-white bg-white dark:bg-black p-4 mb-6">
-              <p className="text-sm font-bold text-black dark:text-white">
-                📝 Credentials loaded from <code className="bg-black dark:bg-white text-white dark:text-black px-2 py-1">.env</code> file
-              </p>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-black text-black dark:text-white mb-2 uppercase tracking-wide">
-                  Folder ID
-                </label>
-                <input
-                  type="text"
-                  value={driveFolderId}
-                  readOnly
-                  disabled
-                  className="input-brutal w-full px-4 py-3 text-lg opacity-60 cursor-not-allowed"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-black text-black dark:text-white mb-2 uppercase tracking-wide">
-                  API Key
-                </label>
-                <input
-                  type="password"
-                  value={apiKey ? '•'.repeat(Math.min(apiKey.length, 40)) : ''}
-                  readOnly
-                  disabled
-                  className="input-brutal w-full px-4 py-3 text-lg opacity-60 cursor-not-allowed"
-                />
-              </div>
-              <button
-                onClick={loadVideos}
-                disabled={loading}
-                className="btn-brutal-primary w-full px-6 py-4 text-lg uppercase tracking-wider disabled:opacity-50"
-              >
-                {loading ? 'Loading...' : 'Refresh Files'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Error Display */}
       {error && (

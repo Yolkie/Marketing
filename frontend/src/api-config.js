@@ -10,19 +10,6 @@ const getAuthToken = () => {
 // API helper functions
 export const api = {
   // Authentication
-  async register(email, password, name) {
-    const response = await fetch(`${API_BASE_URL}/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, name }),
-    });
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Registration failed');
-    }
-    return response.json();
-  },
-
   async login(email, password) {
     const response = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
@@ -84,7 +71,8 @@ export const api = {
   },
 
   // Fetch files from Google Drive (via backend to avoid CORS)
-  async fetchDriveFiles(folderId, apiKey) {
+  // Settings are loaded from database automatically
+  async fetchDriveFiles() {
     const token = getAuthToken();
     const response = await fetch(`${API_BASE_URL}/drive/fetch`, {
       method: 'POST',
@@ -92,7 +80,7 @@ export const api = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ folderId, apiKey }),
+      // No body needed - backend loads settings from database
     });
     if (!response.ok) {
       const error = await response.json();
@@ -101,7 +89,7 @@ export const api = {
     return response.json();
   },
 
-  async syncContent(folderId, apiKey, contentItems) {
+  async syncContent(contentItems) {
     const token = getAuthToken();
     const response = await fetch(`${API_BASE_URL}/content/sync`, {
       method: 'POST',
@@ -109,7 +97,7 @@ export const api = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ folderId, apiKey, contentItems }),
+      body: JSON.stringify({ contentItems }),
     });
     if (!response.ok) {
       const error = await response.json();
@@ -192,6 +180,66 @@ export const api = {
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || 'Failed to update settings');
+    }
+    return response.json();
+  },
+
+  // User Management (Admin only)
+  async getUsers() {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/users`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to fetch users');
+    }
+    return response.json();
+  },
+
+  async createUser(userData) {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/users`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(userData),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to create user');
+    }
+    return response.json();
+  },
+
+  async updateUser(userId, userData) {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/users/${userId}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(userData),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to update user');
+    }
+    return response.json();
+  },
+
+  async deleteUser(userId) {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/users/${userId}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to delete user');
     }
     return response.json();
   },

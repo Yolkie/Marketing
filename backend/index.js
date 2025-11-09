@@ -10,7 +10,6 @@ const { apiLimiter, authLimiter, securityHeaders, corsOptions } = require('./mid
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const { requireAdmin, setPool: setAdminAuthPool } = require('./middleware/adminAuth');
 const {
-  validateRegister,
   validateLogin,
   validateUUIDParam,
   validateContentSync,
@@ -181,60 +180,7 @@ const authenticateToken = (req, res, next) => {
 
 // ==================== AUTHENTICATION ROUTES ====================
 
-// Register new user
-app.post('/api/auth/register', authLimiter, validateRegister, async (req, res) => {
-  try {
-    const { email, password, name } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
-
-    // Check if user exists
-    const userCheck = await pool.query(
-      'SELECT id FROM users WHERE email = $1',
-      [email]
-    );
-
-    if (userCheck.rows.length > 0) {
-      return res.status(400).json({ error: 'User already exists' });
-    }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create user
-    const result = await pool.query(
-      'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, created_at',
-      [email, hashedPassword, name || email.split('@')[0]]
-    );
-
-    const user = result.rows[0];
-
-    // Generate JWT token
-    if (!process.env.JWT_SECRET) {
-      return res.status(500).json({ error: 'Server configuration error' });
-    }
-
-    const token = jwt.sign(
-      { userId: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    res.status(201).json({
-      token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-      },
-    });
-  } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+// Registration removed - users must be created by admin
 
 // Login
 app.post('/api/auth/login', authLimiter, validateLogin, async (req, res) => {
@@ -527,38 +473,27 @@ app.get('/api/content/:id', apiLimiter, authenticateToken, validateUUIDParam('id
 });
 
 // Fetch files from Google Drive (backend endpoint to avoid CORS)
-// Allow test token for test mode
-app.post('/api/drive/fetch', apiLimiter, async (req, res) => {
-  // Optional auth check - allow test mode
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  
-  // In test mode, allow without auth or with test token
-  if (token && token !== 'test-token') {
-    // Verify real token
-    try {
-      if (process.env.JWT_SECRET) {
-        jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-          if (err && process.env.NODE_ENV === 'production') {
-            return res.status(403).json({ error: 'Invalid or expired token' });
-          }
-          if (!err) {
-            req.user = user;
-          }
-        });
-      }
-    } catch (err) {
-      // Ignore auth errors in test mode
-      if (process.env.NODE_ENV === 'production') {
-        return res.status(403).json({ error: 'Invalid token' });
-      }
-    }
-  }
+// Fetch files from Google Drive using database settings
+app.post('/api/drive/fetch', apiLimiter, authenticateToken, async (req, res) => {
   try {
-    const { folderId, apiKey } = req.body;
+    // Load settings from database
+    const settingsResult = await pool.query(
+      'SELECT key, value FROM settings WHERE key IN ($1, $2)',
+      ['google_drive_folder_id', 'google_drive_api_key']
+    );
+
+    const settings = {};
+    settingsResult.rows.forEach(row => {
+      settings[row.key] = row.value;
+    });
+
+    const folderId = settings.google_drive_folder_id;
+    const apiKey = settings.google_drive_api_key;
 
     if (!folderId || !apiKey) {
-      return res.status(400).json({ error: 'Folder ID and API Key are required' });
+      return res.status(400).json({ 
+        error: 'Google Drive settings not configured. Please configure Folder ID and API Key in Admin Settings.' 
+      });
     }
 
     // Validate inputs
@@ -755,14 +690,7 @@ app.post('/api/drive/fetch', apiLimiter, async (req, res) => {
 // Sync content from Google Drive
 app.post('/api/content/sync', apiLimiter, authenticateToken, validateContentSync, async (req, res) => {
   try {
-    const { folderId, apiKey } = req.body;
-
-    if (!folderId || !apiKey) {
-      return res.status(400).json({ error: 'Folder ID and API Key are required' });
-    }
-
-    // Fetch files from Google Drive (you can move this logic here or keep it in frontend)
-    // For now, this endpoint accepts content items to sync
+    // This endpoint accepts content items to sync (settings loaded from database)
     const { contentItems } = req.body;
 
     if (!contentItems || !Array.isArray(contentItems)) {
