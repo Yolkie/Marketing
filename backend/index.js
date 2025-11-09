@@ -1137,7 +1137,15 @@ app.post('/api/webhooks/n8n', async (req, res) => {
         });
       } catch (insertError) {
         await pool.query('ROLLBACK');
-        console.error('❌ Error storing captions, transaction rolled back:', insertError);
+        console.error('❌ Error storing captions, transaction rolled back:', {
+          error: insertError.message,
+          code: insertError.code,
+          detail: insertError.detail,
+          hint: insertError.hint,
+          stack: insertError.stack,
+          finalContentItemId,
+          captionCount: validCaptions.length
+        });
         throw insertError;
       }
 
@@ -1161,10 +1169,32 @@ app.post('/api/webhooks/n8n', async (req, res) => {
       res.json({ received: true, event });
     }
   } catch (error) {
-    console.error('n8n webhook error:', error);
+    console.error('❌ n8n webhook error:', {
+      error: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      body: req.body
+    });
+    
+    // Provide more specific error messages
+    let errorMessage = error.message || 'An error occurred processing the webhook';
+    
+    // Check for common database errors
+    if (error.code === '42703') {
+      errorMessage = `Database column error: ${error.message}. Please check your database schema matches the expected structure. Run the fix_captions_table.sql script if needed.`;
+    } else if (error.code === '42P01') {
+      errorMessage = `Database table error: ${error.message}. Please ensure all required tables exist.`;
+    } else if (error.code === '23503') {
+      errorMessage = `Foreign key constraint error: ${error.message}. The referenced content item may not exist.`;
+    }
+    
     res.status(500).json({ 
       error: 'Internal server error',
-      message: error.message 
+      message: errorMessage,
+      code: error.code,
+      detail: process.env.NODE_ENV === 'development' ? error.detail : undefined
     });
   }
 });

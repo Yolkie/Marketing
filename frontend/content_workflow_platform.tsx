@@ -103,39 +103,7 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
     }
   };
 
-  // Generate captions for files
-  const generateCaptions = (filename, isVideo) => {
-    const baseName = filename.replace(/\.[^/.]+$/, '');
-    
-    return [
-      {
-        id: `cap_${Date.now()}_1`,
-        version: 1,
-        tone: 'Professional',
-        content: `📢 ${baseName} - Discover our latest content featuring ${baseName}. Experience quality and innovation. #Content #Marketing`,
-        status: 'pending',
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: `cap_${Date.now()}_2`,
-        version: 1,
-        tone: 'Casual',
-        content: `Hey! 👋 Check out this awesome ${isVideo ? 'video' : 'image'} - ${baseName}. You're gonna love it! #NewContent`,
-        status: 'pending',
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: `cap_${Date.now()}_3`,
-        version: 1,
-        tone: 'Engaging',
-        content: `✨ ${baseName} is here! Swipe up to see what's new and exciting. Don't miss out! 🔥 #MustSee #Trending`,
-        status: 'pending',
-        createdAt: new Date().toISOString()
-      }
-    ];
-  };
-
-  // Load videos from Google Drive (using database settings)
+  // Load content from database (includes captions from database)
   const loadVideos = async () => {
     setLoading(true);
     setError(null);
@@ -149,14 +117,13 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
       }
       
       try {
-        // Backend now loads settings from database automatically
-        const response = await fetch(`${API_BASE_URL}/drive/fetch`, {
-          method: 'POST',
+        // Fetch content from database - this includes captions loaded from database
+        const response = await fetch(`${API_BASE_URL}/content`, {
+          method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          // No body needed - backend loads from database
         });
 
         if (!response.ok) {
@@ -168,7 +135,7 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
             throw new Error(`HTTP ${response.status}: ${response.statusText}\n\n${errorText}`);
           }
           
-          let errorMessage = errorData.error || errorData.message || 'Failed to fetch files from Google Drive';
+          let errorMessage = errorData.error || errorData.message || 'Failed to fetch content from database';
           throw new Error(errorMessage);
         }
 
@@ -179,14 +146,25 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
           throw new Error('Failed to parse backend response: ' + parseError.message);
         }
         
-        const files = data.files || [];
+        // Content items from database already include captions loaded via LEFT JOIN
+        const contentItems = data.content || [];
         
-        const filesWithCaptions = files.map(file => ({
-          ...file,
-          captions: generateCaptions(file.filename, file.fileType === 'video')
+        // Transform to match expected format (captions are already included from database)
+        const formattedContent = contentItems.map(item => ({
+          id: item.id,
+          filename: item.filename,
+          fileType: item.fileType,
+          uploadedAt: item.uploadedAt,
+          status: item.status,
+          driveUrl: item.driveUrl,
+          thumbnailUrl: item.thumbnailUrl,
+          embedUrl: item.embedUrl,
+          mimeType: item.mimeType,
+          // Captions are already loaded from database via content_item_id
+          captions: item.captions || []
         }));
         
-        setVideos(filesWithCaptions);
+        setVideos(formattedContent);
         return;
       } catch (backendError) {
         if (backendError.message.includes('Failed to fetch') || 
@@ -195,17 +173,17 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
           throw new Error(
             '❌ Cannot connect to backend server!\n\n' +
             'Please make sure:\n' +
-            '1. Backend server is running: `cd server && npm run dev`\n' +
+            '1. Backend server is running: `cd backend && npm run dev`\n' +
             '2. Backend is running on http://localhost:3001\n' +
-            `Tried to connect to: ${API_BASE_URL}/drive/fetch`
+            `Tried to connect to: ${API_BASE_URL}/content`
           );
         }
         throw backendError;
       }
     } catch (err) {
-      const errorMessage = err.message || 'Failed to load files from Google Drive';
+      const errorMessage = err.message || 'Failed to load content from database';
       setError(errorMessage);
-      console.error('Error loading videos:', err);
+      console.error('Error loading content:', err);
     } finally {
       setLoading(false);
     }
