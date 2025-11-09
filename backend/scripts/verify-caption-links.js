@@ -4,11 +4,11 @@
  * This script verifies that all captions are correctly linked to their content items
  * by checking the drive_file_id relationship.
  * 
- * Usage: node server/scripts/verify-caption-links.js [driveFileId]
+ * Usage: node backend/scripts/verify-caption-links.js [driveFileId]
  */
 
 const { Pool } = require('pg');
-require('dotenv').config({ path: './server/.env' });
+require('dotenv').config({ path: './.env' });
 
 const pool = new Pool({
   user: process.env.DB_USER,

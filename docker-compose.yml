@@ -1,43 +1,49 @@
 version: '3.8'
 
 services:
-  # PostgreSQL Database
-  postgres:
-    image: postgres:15-alpine
-    container_name: marketing-dashboard-db
-    environment:
-      POSTGRES_DB: ${DB_NAME:-marketing_dashboard}
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./server/database/complete_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-      - ./server/database/init_users.sql:/docker-entrypoint-initdb.d/02-users.sql:ro
-    ports:
-      - "${DB_PORT:-5432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - marketing-network
-    restart: unless-stopped
+  # PostgreSQL Database (Optional - comment out if using remote database)
+  # Uncomment this section if you want to use a containerized database
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: marketing-dashboard-db
+  #   environment:
+  #     POSTGRES_DB: ${DB_NAME:-marketing_dashboard}
+  #     POSTGRES_USER: ${DB_USER:-postgres}
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD}
+    #   volumes:
+    #     - postgres_data:/var/lib/postgresql/data
+    #     - ./backend/database/complete_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    #     - ./backend/database/init_users.sql:/docker-entrypoint-initdb.d/02-users.sql:ro
+  #   ports:
+  #     - "${DB_PORT:-5432}:5432"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   networks:
+  #     - marketing-network
+  #   restart: unless-stopped
 
   # Backend API
   backend:
     build:
-      context: ./server
+      context: ./backend
       dockerfile: Dockerfile
     container_name: marketing-dashboard-backend
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 3001
-      DB_HOST: postgres
-      DB_PORT: 5432
+      # Remote Database Configuration (set these in .env file)
+      DB_HOST: ${DB_HOST}  # Your remote database hostname/IP
+      DB_PORT: ${DB_PORT:-5432}
       DB_NAME: ${DB_NAME:-marketing_dashboard}
-      DB_USER: ${DB_USER:-postgres}
+      DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
+      # SSL Configuration for remote database
+      # Set DB_SSL=true for remote databases, false for localhost
+      DB_SSL: ${DB_SSL:-true}
+      DB_SSL_REJECT_UNAUTHORIZED: ${DB_SSL_REJECT_UNAUTHORIZED:-false}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
       N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-}
@@ -45,25 +51,26 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:80}
     ports:
       - "${BACKEND_PORT:-3001}:3001"
-    depends_on:
-      postgres:
-        condition: service_healthy
+    # Remove depends_on if using remote database
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
     networks:
       - marketing-network
     restart: unless-stopped
     # Remove volume mounts for production - use built image
     # volumes:
-    #   - ./server:/app
+    #   - ./backend:/app
     #   - /app/node_modules
 
   # Frontend
   frontend:
     build:
-      context: .
+      context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=${VITE_API_URL:-http://localhost:3001/api}
     container_name: marketing-dashboard-frontend
-    environment:
-      - VITE_API_URL=${VITE_API_URL:-http://localhost:3001/api}
     ports:
       - "${FRONTEND_PORT:-80}:80"
     depends_on:
@@ -72,9 +79,10 @@ services:
       - marketing-network
     restart: unless-stopped
 
-volumes:
-  postgres_data:
-    driver: local
+# volumes:
+#   postgres_data:
+#     driver: local
+# Uncomment above if using containerized database
 
 networks:
   marketing-network:

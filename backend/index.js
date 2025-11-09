@@ -60,21 +60,36 @@ const poolConfig = {
 };
 
 // SSL configuration for remote databases
+// Only enable SSL if explicitly requested OR if DB_HOST is clearly a remote host (not Docker service name)
+const isDockerServiceName = process.env.DB_HOST === 'postgres' || process.env.DB_HOST === 'db';
+const isLocalhost = !process.env.DB_HOST || 
+                    process.env.DB_HOST === 'localhost' || 
+                    process.env.DB_HOST === '127.0.0.1';
+const isRemoteHost = process.env.DB_HOST && 
+                     !isLocalhost && 
+                     !isDockerServiceName &&
+                     (process.env.DB_HOST.includes('.') || process.env.DB_HOST.includes('amazonaws.com') || process.env.DB_HOST.includes('rds.amazonaws.com'));
+
+// Explicit SSL setting takes precedence
 if (process.env.DB_SSL === 'true' || process.env.DB_SSL === '1') {
   poolConfig.ssl = {
     rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
   };
-  console.log('🔒 SSL enabled for database connection');
-}
-
-// If DB_HOST is not localhost, assume it's a remote database and enable SSL
-if (process.env.DB_HOST && process.env.DB_HOST !== 'localhost' && process.env.DB_HOST !== '127.0.0.1') {
-  if (!poolConfig.ssl) {
-    poolConfig.ssl = {
-      rejectUnauthorized: false, // Allow self-signed certificates for remote databases
-    };
-    console.log('🔒 SSL enabled for remote database connection');
-  }
+  console.log('🔒 SSL enabled for database connection (explicit)');
+} else if (process.env.DB_SSL === 'false' || process.env.DB_SSL === '0') {
+  // Explicitly disable SSL
+  poolConfig.ssl = false;
+  console.log('🔓 SSL disabled for database connection (explicit)');
+} else if (isDockerServiceName || isLocalhost) {
+  // Docker Compose or localhost - disable SSL
+  poolConfig.ssl = false;
+  console.log('🔓 SSL disabled for local/Docker database connection');
+} else if (isRemoteHost) {
+  // Remote database (hosting service) - enable SSL
+  poolConfig.ssl = {
+    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
+  };
+  console.log('🔒 SSL enabled for remote database connection');
 }
 
 const pool = new Pool(poolConfig);

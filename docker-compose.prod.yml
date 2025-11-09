@@ -11,8 +11,8 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./server/database/complete_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-      - ./server/database/init_users.sql:/docker-entrypoint-initdb.d/02-users.sql:ro
+      - ./backend/database/complete_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./backend/database/init_users.sql:/docker-entrypoint-initdb.d/02-users.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
       interval: 10s
@@ -28,7 +28,7 @@ services:
   # Backend API
   backend:
     build:
-      context: ./server
+      context: ./backend
       dockerfile: Dockerfile
     container_name: marketing-dashboard-backend
     environment:
@@ -54,12 +54,12 @@ services:
     restart: always
     # Remove volume mount in production (use built image)
     # volumes:
-    #   - ./server:/app
+    #   - ./backend:/app
 
   # Frontend
   frontend:
     build:
-      context: .
+      context: ./frontend
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL}
