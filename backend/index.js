@@ -720,7 +720,7 @@ app.post('/api/drive/fetch', apiLimiter, authenticateToken, async (req, res) => 
 });
 
 // Sync content from Google Drive
-app.post('/api/content/sync', apiLimiter, authenticateTokenOrWebhook, validateContentSync, async (req, res) => {
+app.post('/api/content/sync', apiLimiter, validateContentSync, async (req, res) => {
   try {
     // This endpoint accepts content items to sync (settings loaded from database)
     const { contentItems } = req.body;
