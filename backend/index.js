@@ -975,6 +975,90 @@ app.post('/api/captions/:id/approve', apiLimiter, authenticateToken, validateUUI
   }
 });
 
+// Re-caption: Trigger n8n workflow to generate new captions
+app.post('/api/content/:contentId/recaption', apiLimiter, authenticateToken, validateUUIDParam('contentId'), async (req, res) => {
+  try {
+    const { contentId } = req.params;
+
+    // Get content item info
+    const contentResult = await pool.query(
+      `SELECT id, drive_file_id, filename, file_type, drive_url, embed_url, thumbnail_url, mime_type
+       FROM content_items
+       WHERE id = $1`,
+      [contentId]
+    );
+
+    if (contentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Content item not found' });
+    }
+
+    const contentItem = contentResult.rows[0];
+
+    // Use N8N_RECAPTION_WEBHOOK_URL if available, otherwise fall back to N8N_WEBHOOK_URL
+    const webhookUrl = process.env.N8N_RECAPTION_WEBHOOK_URL || process.env.N8N_WEBHOOK_URL;
+
+    // Trigger webhook for n8n (if configured)
+    if (webhookUrl) {
+      try {
+        const webhookPayload = {
+          event: 'recaption_requested',
+          contentItemId: contentItem.id,
+          driveFileId: contentItem.drive_file_id,
+          content: {
+            filename: contentItem.filename,
+            fileType: contentItem.file_type,
+            driveUrl: contentItem.drive_url,
+            embedUrl: contentItem.embed_url,
+            thumbnailUrl: contentItem.thumbnail_url,
+            mimeType: contentItem.mime_type,
+          },
+          requestedBy: req.user.userId,
+          requestedAt: new Date().toISOString(),
+        };
+
+        console.log('Triggering re-caption webhook:', {
+          webhookUrl,
+          contentItemId: contentItem.id,
+          driveFileId: contentItem.drive_file_id,
+          filename: contentItem.filename,
+        });
+
+        const webhookResponse = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(webhookPayload),
+        });
+
+        if (!webhookResponse.ok) {
+          const errorText = await webhookResponse.text();
+          console.error('Webhook error response:', {
+            status: webhookResponse.status,
+            statusText: webhookResponse.statusText,
+            body: errorText,
+          });
+          // Don't fail the request, but log the error
+        } else {
+          console.log('Re-caption webhook triggered successfully');
+        }
+      } catch (webhookError) {
+        console.error('Webhook error (non-critical):', webhookError);
+        // Don't fail the request if webhook fails
+      }
+    } else {
+      console.warn('No n8n webhook URL configured. Set N8N_RECAPTION_WEBHOOK_URL or N8N_WEBHOOK_URL environment variable.');
+    }
+
+    res.json({
+      message: 'Re-caption request sent successfully',
+      contentItemId: contentItem.id,
+      webhookTriggered: !!webhookUrl,
+    });
+  } catch (error) {
+    console.error('Re-caption error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ==================== WEBHOOK ROUTES ====================
 
 // Webhook endpoint for Google Drive notifications
@@ -1146,62 +1230,98 @@ app.post('/api/webhooks/n8n', async (req, res) => {
         });
       }
 
-      // Store captions with transaction for atomicity
-      const insertedCaptions = [];
+      // Store/Update captions with transaction for atomicity
+      // Use UPSERT to update existing captions by tone, keeping exactly 3 captions (one per tone)
+      const updatedCaptions = [];
       
       try {
-        // Use a transaction to ensure all captions are inserted or none
+        // Use a transaction to ensure all captions are updated/inserted or none
         await pool.query('BEGIN');
         
         for (const caption of validCaptions) {
-          const result = await pool.query(
-            `INSERT INTO captions (content_item_id, tone, content, status, created_at)
-             VALUES ($1, $2, $3, 'pending', NOW())
-             RETURNING id, version, tone, content, status, created_at`,
-            [finalContentItemId, caption.tone, caption.content.trim()]
+          // Check if a caption with this tone already exists
+          const existingResult = await pool.query(
+            `SELECT id, version FROM captions 
+             WHERE content_item_id = $1 AND tone = $2`,
+            [finalContentItemId, caption.tone]
           );
-          insertedCaptions.push(result.rows[0]);
+          
+          if (existingResult.rows.length > 0) {
+            // Update existing caption - increment version and update content
+            // Preserve approval status and metadata if caption is already approved
+            const existing = existingResult.rows[0];
+            const newVersion = existing.version + 1;
+            
+            // When updating, reset approved captions to pending so user can review new content
+            // Clear approval metadata when resetting to pending
+            const result = await pool.query(
+              `UPDATE captions 
+               SET content = $1, 
+                   version = $2, 
+                   updated_at = NOW(),
+                   created_at = CASE 
+                     WHEN status = 'approved' THEN created_at 
+                     ELSE NOW() 
+                   END,
+                   status = 'pending',
+                   approved_by = NULL,
+                   approved_at = NULL
+               WHERE id = $3
+               RETURNING id, version, tone, content, status, created_at, updated_at, approved_by, approved_at`,
+              [caption.content.trim(), newVersion, existing.id]
+            );
+            updatedCaptions.push(result.rows[0]);
+          } else {
+            // Insert new caption if tone doesn't exist yet
+            const result = await pool.query(
+              `INSERT INTO captions (content_item_id, tone, content, status, created_at)
+               VALUES ($1, $2, $3, 'pending', NOW())
+               RETURNING id, version, tone, content, status, created_at, updated_at`,
+              [finalContentItemId, caption.tone, caption.content.trim()]
+            );
+            updatedCaptions.push(result.rows[0]);
+          }
         }
         
         await pool.query('COMMIT');
         
         // Enhanced logging with full verification details
-        console.log(`✅ Successfully stored ${insertedCaptions.length} caption(s):`, {
+        console.log(`✅ Successfully updated/stored ${updatedCaptions.length} caption(s):`, {
           contentItemId: finalContentItemId,
           driveFileId: verifiedDriveFileId,
           filename: contentItem.filename,
           fileType: contentItem.file_type,
-          captionCount: insertedCaptions.length,
-          captions: insertedCaptions.map(c => ({ id: c.id, tone: c.tone })),
+          captionCount: updatedCaptions.length,
+          captions: updatedCaptions.map(c => ({ id: c.id, tone: c.tone, version: c.version })),
           timestamp: new Date().toISOString()
         });
-      } catch (insertError) {
+      } catch (updateError) {
         await pool.query('ROLLBACK');
-        console.error('❌ Error storing captions, transaction rolled back:', {
-          error: insertError.message,
-          code: insertError.code,
-          detail: insertError.detail,
-          hint: insertError.hint,
-          stack: insertError.stack,
+        console.error('❌ Error storing/updating captions, transaction rolled back:', {
+          error: updateError.message,
+          code: updateError.code,
+          detail: updateError.detail,
+          hint: updateError.hint,
+          stack: updateError.stack,
           finalContentItemId,
           captionCount: validCaptions.length
         });
-        throw insertError;
+        throw updateError;
       }
 
       res.json({ 
         received: true, 
         event,
-        message: `Successfully stored ${insertedCaptions.length} caption(s)`,
+        message: `Successfully updated/stored ${updatedCaptions.length} caption(s)`,
         contentItemId: finalContentItemId,
         driveFileId: verifiedDriveFileId, // Return for verification
         filename: contentItem.filename,     // Return for verification
         fileType: contentItem.file_type,   // Return for verification
-        captions: insertedCaptions,
+        captions: updatedCaptions,
         verification: {
           driveFileId: verifiedDriveFileId,
           contentItemId: finalContentItemId,
-          captionCount: insertedCaptions.length,
+          captionCount: updatedCaptions.length,
           timestamp: new Date().toISOString()
         }
       });

@@ -137,6 +137,19 @@ export const api = {
     }
     return response.json();
   },
+
+  async recaption(contentItemId) {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/content/${contentItemId}/recaption`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to trigger re-caption');
+    }
+    return response.json();
+  },
 };
 
 

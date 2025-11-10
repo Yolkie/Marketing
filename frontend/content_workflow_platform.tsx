@@ -219,6 +219,52 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Poll for caption updates when a content item is selected
+  useEffect(() => {
+    if (!selectedVideo) return;
+
+    const contentItemId = selectedVideo.id;
+
+    // Poll every 3 seconds for updates when viewing a content item
+    const pollInterval = setInterval(async () => {
+      try {
+        const data = await api.getContentItem(contentItemId);
+        if (data.content) {
+          const newCaptions = data.content.captions || [];
+          
+          // Update state using functional updates to always get latest state
+          setSelectedVideo(prev => {
+            if (!prev || prev.id !== contentItemId) return prev;
+            
+            // Check if captions have actually changed
+            const captionsChanged = JSON.stringify(prev.captions) !== JSON.stringify(newCaptions);
+            
+            if (captionsChanged) {
+              return { ...prev, captions: newCaptions };
+            }
+            return prev;
+          });
+          
+          // Also update it in the videos list
+          setVideos(prevVideos => 
+            prevVideos.map(v => {
+              if (v.id === contentItemId) {
+                const captionsChanged = JSON.stringify(v.captions) !== JSON.stringify(newCaptions);
+                return captionsChanged ? { ...v, captions: newCaptions } : v;
+              }
+              return v;
+            })
+          );
+        }
+      } catch (err) {
+        // Silently fail polling errors - don't spam console
+        console.debug('Polling error (non-critical):', err);
+      }
+    }, 3000); // Poll every 3 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [selectedVideo?.id]); // Re-run when selected video changes
+
   const filteredVideos = videos.filter(v => {
     if (filter === 'pending') return v.status === 'pending_review';
     if (filter === 'approved') return v.status === 'approved';
@@ -298,6 +344,29 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
       setSelectedVideo(null);
       setLoading(false);
     }, 1000);
+  };
+
+  const handleRecaption = async () => {
+    if (!selectedVideo) return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const response = await api.recaption(selectedVideo.id);
+      console.log('Re-caption triggered:', response);
+      
+      // Show success message
+      alert('Re-caption request sent! New captions will be generated and appear automatically.');
+      
+      // Polling will automatically pick up the new captions, no need to manually refresh
+      // The polling effect will detect changes and update the UI
+    } catch (err) {
+      console.error('Re-caption error:', err);
+      setError(err.message || 'Failed to trigger re-caption');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getToneColor = (tone) => {
@@ -686,9 +755,24 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
                     <h3 className="text-xl font-black text-black dark:text-white uppercase tracking-tight">
                       AI-Generated Captions
                     </h3>
-                    <span className="text-sm font-bold text-black dark:text-white opacity-70 uppercase">
-                      Select one to approve or edit
-                    </span>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <button
+                        onClick={handleRecaption}
+                        disabled={loading}
+                        className="btn-brutal px-4 py-2 uppercase tracking-wider text-sm disabled:opacity-50 flex items-center gap-2"
+                        title="Generate new AI captions for this content"
+                      >
+                        {loading ? (
+                          <Loader className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-4 h-4" />
+                        )}
+                        Re-caption
+                      </button>
+                      <span className="text-sm font-bold text-black dark:text-white opacity-70 uppercase">
+                        Select one to approve or edit
+                      </span>
+                    </div>
                   </div>
 
                   {selectedVideo.captions.map((caption) => (
