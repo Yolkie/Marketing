@@ -994,8 +994,26 @@ app.post('/api/content/:contentId/recaption', apiLimiter, authenticateToken, val
 
     const contentItem = contentResult.rows[0];
 
-    // Use N8N_RECAPTION_WEBHOOK_URL if available, otherwise fall back to N8N_WEBHOOK_URL
-    const webhookUrl = process.env.N8N_RECAPTION_WEBHOOK_URL || process.env.N8N_WEBHOOK_URL;
+    // Get webhook URL from settings (database) or fall back to environment variables
+    let webhookUrl = null;
+    
+    try {
+      const settingsResult = await pool.query(
+        'SELECT value FROM settings WHERE key = $1',
+        ['n8n_recaption_webhook_url']
+      );
+      
+      if (settingsResult.rows.length > 0 && settingsResult.rows[0].value && settingsResult.rows[0].value.trim()) {
+        webhookUrl = settingsResult.rows[0].value.trim();
+      }
+    } catch (settingsError) {
+      console.warn('Error reading n8n_recaption_webhook_url from settings:', settingsError);
+    }
+    
+    // Fall back to environment variables if not set in database
+    if (!webhookUrl) {
+      webhookUrl = process.env.N8N_RECAPTION_WEBHOOK_URL || process.env.N8N_WEBHOOK_URL || null;
+    }
 
     // Trigger webhook for n8n (if configured)
     if (webhookUrl) {
@@ -1045,7 +1063,7 @@ app.post('/api/content/:contentId/recaption', apiLimiter, authenticateToken, val
         // Don't fail the request if webhook fails
       }
     } else {
-      console.warn('No n8n webhook URL configured. Set N8N_RECAPTION_WEBHOOK_URL or N8N_WEBHOOK_URL environment variable.');
+      console.warn('No n8n re-caption webhook URL configured. Please set it in Admin Settings or set N8N_RECAPTION_WEBHOOK_URL environment variable.');
     }
 
     res.json({
@@ -1549,7 +1567,7 @@ app.get('/api/settings', authenticateToken, requireAdmin, async (req, res) => {
 // Update settings (admin only)
 app.put('/api/settings', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { google_drive_folder_id, google_drive_api_key } = req.body;
+    const { google_drive_folder_id, google_drive_api_key, n8n_recaption_webhook_url } = req.body;
 
     if (google_drive_folder_id !== undefined) {
       await pool.query(
@@ -1565,10 +1583,17 @@ app.put('/api/settings', authenticateToken, requireAdmin, async (req, res) => {
       );
     }
 
+    if (n8n_recaption_webhook_url !== undefined) {
+      await pool.query(
+        'UPDATE settings SET value = $1, updated_by = $2, updated_at = CURRENT_TIMESTAMP WHERE key = $3',
+        [n8n_recaption_webhook_url || '', req.user.userId, 'n8n_recaption_webhook_url']
+      );
+    }
+
     // Return updated settings
     const result = await pool.query(
-      'SELECT key, value, description, updated_at FROM settings WHERE key IN ($1, $2)',
-      ['google_drive_folder_id', 'google_drive_api_key']
+      'SELECT key, value, description, updated_at FROM settings WHERE key IN ($1, $2, $3)',
+      ['google_drive_folder_id', 'google_drive_api_key', 'n8n_recaption_webhook_url']
     );
 
     const settings = {};

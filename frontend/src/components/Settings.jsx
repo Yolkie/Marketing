@@ -8,6 +8,7 @@ const Settings = ({ user, onBack }) => {
   const [settings, setSettings] = useState({
     google_drive_folder_id: '',
     google_drive_api_key: '',
+    n8n_recaption_webhook_url: '',
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -28,6 +29,7 @@ const Settings = ({ user, onBack }) => {
         setSettings({
           google_drive_folder_id: data.settings.google_drive_folder_id?.value || '',
           google_drive_api_key: data.settings.google_drive_api_key?.value || '',
+          n8n_recaption_webhook_url: data.settings.n8n_recaption_webhook_url?.value || '',
         });
       }
     } catch (err) {
@@ -48,6 +50,7 @@ const Settings = ({ user, onBack }) => {
       await api.updateSettings({
         google_drive_folder_id: settings.google_drive_folder_id,
         google_drive_api_key: settings.google_drive_api_key,
+        n8n_recaption_webhook_url: settings.n8n_recaption_webhook_url,
       });
 
       setSuccess('Settings saved successfully!');
@@ -146,6 +149,27 @@ const Settings = ({ user, onBack }) => {
               </div>
               <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
                 Your Google Drive API key for authentication
+              </p>
+            </div>
+
+            {/* n8n Re-caption Webhook URL */}
+            <div>
+              <label
+                htmlFor="n8n_recaption_webhook_url"
+                className="block text-sm font-bold text-black dark:text-white mb-2"
+              >
+                n8n Re-caption Webhook URL
+              </label>
+              <input
+                id="n8n_recaption_webhook_url"
+                type="url"
+                value={settings.n8n_recaption_webhook_url}
+                onChange={(e) => handleChange('n8n_recaption_webhook_url', e.target.value)}
+                className="input-brutal w-full"
+                placeholder="https://your-n8n-instance.com/webhook/recaption"
+              />
+              <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                The n8n webhook URL for the re-caption workflow. This triggers AI caption generation when the Re-caption button is clicked.
               </p>
             </div>
 
