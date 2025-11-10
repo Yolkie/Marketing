@@ -879,7 +879,9 @@ app.put('/api/captions/:id', apiLimiter, authenticateToken, validateUUIDParam('i
       return res.status(404).json({ error: 'Caption not found' });
     }
 
-    const newVersion = current.rows[0].version + 1;
+    // Ensure version is treated as a number, not a string
+    const currentVersion = Number(current.rows[0].version) || 1;
+    const newVersion = currentVersion + 1;
 
     // Update caption
     const result = await pool.query(
@@ -1267,7 +1269,9 @@ app.post('/api/webhooks/n8n', async (req, res) => {
           if (existingResult.rows.length > 0) {
             // Update existing caption - increment version and update content
             const existing = existingResult.rows[0];
-            const newVersion = existing.version + 1;
+            // Ensure version is treated as a number, not a string
+            const currentVersion = Number(existing.version) || 1;
+            const newVersion = currentVersion + 1;
             const wasApproved = existing.status === 'approved';
             
             // When updating, reset approved captions to pending so user can review new content

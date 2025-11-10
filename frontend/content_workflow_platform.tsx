@@ -295,24 +295,43 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
   };
 
   const handleSaveEdit = async (captionId) => {
-    const updatedVideos = videos.map(v => {
-      if (v.id === selectedVideo.id) {
-        return {
-          ...v,
-          captions: v.captions.map(c => {
-            if (c.id === captionId) {
-              return { ...c, content: editedText, version: c.version + 1 };
-            }
-            return c;
-          })
-        };
-      }
-      return v;
-    });
-    
-    setVideos(updatedVideos);
-    setSelectedVideo(updatedVideos.find(v => v.id === selectedVideo.id));
-    setEditingCaption(null);
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Call API to update caption (backend will handle version increment)
+      const response = await api.updateCaption(captionId, editedText);
+      
+      // Update local state with the response from backend
+      const updatedVideos = videos.map(v => {
+        if (v.id === selectedVideo.id) {
+          return {
+            ...v,
+            captions: v.captions.map(c => {
+              if (c.id === captionId) {
+                // Use the version from backend response (ensures it's a number)
+                return { 
+                  ...c, 
+                  content: response.caption.content, 
+                  version: Number(response.caption.version) || 1 
+                };
+              }
+              return c;
+            })
+          };
+        }
+        return v;
+      });
+      
+      setVideos(updatedVideos);
+      setSelectedVideo(updatedVideos.find(v => v.id === selectedVideo.id));
+      setEditingCaption(null);
+    } catch (err) {
+      console.error('Error saving caption:', err);
+      setError(err.message || 'Failed to save caption');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleApproveCaption = async (captionId) => {
@@ -785,9 +804,9 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
                           <span className={`border-2 border-black dark:border-white px-3 py-1 text-xs font-black uppercase ${getToneColor(caption.tone)}`}>
                             {caption.tone}
                           </span>
-                          {caption.version > 1 && (
+                          {Number(caption.version) > 1 && (
                             <span className="border-2 border-black dark:border-white bg-white dark:bg-black text-black dark:text-white px-2 py-1 text-xs font-black uppercase">
-                              v{caption.version}
+                              v{Number(caption.version)}
                             </span>
                           )}
                           {caption.status === 'approved' && (
