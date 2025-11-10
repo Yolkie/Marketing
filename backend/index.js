@@ -1259,28 +1259,27 @@ app.post('/api/webhooks/n8n', async (req, res) => {
         for (const caption of validCaptions) {
           // Check if a caption with this tone already exists
           const existingResult = await pool.query(
-            `SELECT id, version FROM captions 
+            `SELECT id, version, status FROM captions 
              WHERE content_item_id = $1 AND tone = $2`,
             [finalContentItemId, caption.tone]
           );
           
           if (existingResult.rows.length > 0) {
             // Update existing caption - increment version and update content
-            // Preserve approval status and metadata if caption is already approved
             const existing = existingResult.rows[0];
             const newVersion = existing.version + 1;
+            const wasApproved = existing.status === 'approved';
             
             // When updating, reset approved captions to pending so user can review new content
             // Clear approval metadata when resetting to pending
+            // Preserve created_at if caption was approved, otherwise update it
+            const updateCreatedAt = wasApproved ? '' : ', created_at = NOW()';
+            
             const result = await pool.query(
               `UPDATE captions 
                SET content = $1, 
                    version = $2, 
-                   updated_at = NOW(),
-                   created_at = CASE 
-                     WHEN status = 'approved' THEN created_at 
-                     ELSE NOW() 
-                   END,
+                   updated_at = NOW()${updateCreatedAt},
                    status = 'pending',
                    approved_by = NULL,
                    approved_at = NULL
