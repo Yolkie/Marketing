@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { FileVideo, Clock, CheckCircle, Edit3, Loader, Eye, ThumbsUp, AlertCircle, Settings, Moon, Sun, LogOut, RefreshCw, Users } from 'lucide-react';
+import { FileVideo, Clock, CheckCircle, Edit3, Loader, Eye, ThumbsUp, AlertCircle, Settings, Moon, Sun, LogOut, RefreshCw, Users, BarChart3 } from 'lucide-react';
 import { useTheme } from './src/contexts/ThemeContext.jsx';
 import { api } from './src/api-config.js';
 
-const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick, isAdmin = false }) => {
+const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick, onMonitoringClick, isAdmin = false }) => {
   const { theme, toggleTheme } = useTheme();
   const [videos, setVideos] = useState([]);
   const [selectedVideo, setSelectedVideo] = useState(null);
@@ -443,6 +443,16 @@ const ContentReviewDashboard = ({ user, onLogout, onSettingsClick, onUsersClick,
                 >
                   <Users className="w-4 h-4 inline mr-2" />
                   Users
+                </button>
+              )}
+              {onMonitoringClick && (
+                <button
+                  onClick={onMonitoringClick}
+                  className="btn-brutal px-4 py-2 text-sm font-black uppercase tracking-wider"
+                  title="Monitoring & Analytics"
+                >
+                  <BarChart3 className="w-4 h-4 inline mr-2" />
+                  Monitoring
                 </button>
               )}
               <button
