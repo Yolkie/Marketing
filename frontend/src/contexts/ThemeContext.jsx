@@ -11,16 +11,30 @@ export const useTheme = () => {
 };
 
 export const ThemeProvider = ({ children }) => {
-  const [theme, setTheme] = useState(() => {
-    // Check localStorage first, then system preference
+  // Initialize theme synchronously to prevent flash
+  const getInitialTheme = () => {
+    // Check localStorage first
     const savedTheme = localStorage.getItem('theme');
-    if (savedTheme) return savedTheme;
+    if (savedTheme === 'light' || savedTheme === 'dark') {
+      return savedTheme;
+    }
     
     // Check system preference
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      return 'dark';
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+      }
     }
     return 'light';
+  };
+
+  const [theme, setTheme] = useState(() => {
+    const initialTheme = getInitialTheme();
+    // Set theme immediately on initialization
+    if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-theme', initialTheme);
+    }
+    return initialTheme;
   });
 
   useEffect(() => {
