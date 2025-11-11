@@ -3,7 +3,6 @@ import LoginComponent from './components/LoginComponent';
 import ContentReviewDashboard from './components/ContentReviewDashboard';
 import Settings from './components/Settings';
 import UserManagement from './components/UserManagement';
-import Monitoring from './components/Monitoring';
 import { api } from './api-config';
 import { ThemeProvider } from './contexts/ThemeContext';
 
@@ -12,7 +11,7 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('authToken'));
   const [loading, setLoading] = useState(true);
-  const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard', 'settings', 'users', or 'monitoring'
+  const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard', 'settings', or 'users'
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -86,18 +85,12 @@ const App = () => {
           user={user} 
           onBack={() => setCurrentView('dashboard')} 
         />
-      ) : currentView === 'monitoring' ? (
-        <Monitoring 
-          user={user} 
-          onBack={() => setCurrentView('dashboard')} 
-        />
       ) : (
         <ContentReviewDashboard 
           user={user} 
           onLogout={handleLogout}
           onSettingsClick={() => isAdmin && setCurrentView('settings')}
           onUsersClick={() => isAdmin && setCurrentView('users')}
-          onMonitoringClick={() => setCurrentView('monitoring')}
           isAdmin={isAdmin}
         />
       )}

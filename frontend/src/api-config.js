@@ -256,64 +256,6 @@ export const api = {
     }
     return response.json();
   },
-
-  // Facebook Metrics
-  async getFacebookMetrics(contentItemId) {
-    const token = getAuthToken();
-    const response = await fetch(`${API_BASE_URL}/facebook/metrics/${contentItemId}`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to fetch Facebook metrics');
-    }
-    return response.json();
-  },
-
-  async getAllFacebookMetrics() {
-    const token = getAuthToken();
-    const response = await fetch(`${API_BASE_URL}/facebook/metrics`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to fetch Facebook metrics');
-    }
-    return response.json();
-  },
-
-  async syncFacebookMetrics(contentItemId, postId) {
-    const token = getAuthToken();
-    const response = await fetch(`${API_BASE_URL}/facebook/sync/${contentItemId}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ postId }),
-    });
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || error.details || 'Failed to sync Facebook metrics');
-    }
-    return response.json();
-  },
-
-  async testFacebookConnection() {
-    const token = getAuthToken();
-    const response = await fetch(`${API_BASE_URL}/facebook/test-connection`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    });
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || error.details || 'Failed to test Facebook connection');
-    }
-    return response.json();
-  },
 };
 
 
