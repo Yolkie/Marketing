@@ -1892,6 +1892,128 @@ app.post('/api/facebook/sync/:contentItemId', apiLimiter, authenticateToken, val
   }
 });
 
+// Test Facebook API connection
+app.post('/api/facebook/test-connection', apiLimiter, authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    // Get Facebook API credentials from settings
+    const settingsResult = await pool.query(
+      'SELECT key, value FROM settings WHERE key IN ($1, $2, $3, $4)',
+      ['facebook_app_id', 'facebook_app_secret', 'facebook_access_token', 'facebook_page_id']
+    );
+
+    const settings = {};
+    settingsResult.rows.forEach(row => {
+      settings[row.key] = row.value;
+    });
+
+    // Check if access token is configured
+    if (!settings.facebook_access_token || !settings.facebook_access_token.trim()) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Facebook Access Token is not configured',
+        message: 'Please enter a Facebook Access Token in Settings'
+      });
+    }
+
+    const accessToken = settings.facebook_access_token.trim();
+    let testEndpoint = 'me';
+    
+    // If page ID is configured, test with page endpoint
+    if (settings.facebook_page_id && settings.facebook_page_id.trim()) {
+      testEndpoint = settings.facebook_page_id.trim();
+    }
+
+    // Test connection by fetching basic page/user info
+    const testUrl = `https://graph.facebook.com/v18.0/${testEndpoint}?fields=id,name&access_token=${accessToken}`;
+    
+    console.log('🧪 Testing Facebook API connection...');
+    
+    const fbResponse = await fetch(testUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!fbResponse.ok) {
+      const errorData = await fbResponse.json().catch(() => ({}));
+      console.error('❌ Facebook API Test Failed:', errorData);
+      
+      let errorMessage = 'Failed to connect to Facebook API';
+      let errorDetails = errorData.error?.message || 'Unknown error';
+      
+      // Provide helpful error messages
+      if (errorData.error?.code === 190) {
+        errorMessage = 'Invalid Access Token';
+        errorDetails = 'The access token is invalid or has expired. Please generate a new token.';
+      } else if (errorData.error?.code === 803) {
+        errorMessage = 'Invalid Page ID';
+        errorDetails = 'The page ID is invalid or the token does not have access to this page.';
+      } else if (errorData.error?.code === 200) {
+        errorMessage = 'Permission Denied';
+        errorDetails = 'The access token does not have the required permissions. Please ensure it has pages_read_engagement and pages_read_user_content permissions.';
+      }
+      
+      return res.status(fbResponse.status).json({ 
+        success: false,
+        error: errorMessage,
+        details: errorDetails,
+        facebookError: errorData.error
+      });
+    }
+
+    const fbData = await fbResponse.json();
+    
+    console.log('✅ Facebook API Test Successful:', {
+      id: fbData.id,
+      name: fbData.name,
+      endpoint: testEndpoint
+    });
+
+    // If page ID was used, also test insights access
+    if (settings.facebook_page_id && settings.facebook_page_id.trim()) {
+      const insightsUrl = `https://graph.facebook.com/v18.0/${testEndpoint}/insights?metric=page_fans&period=day&access_token=${accessToken}`;
+      const insightsResponse = await fetch(insightsUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!insightsResponse.ok) {
+        const insightsError = await insightsResponse.json().catch(() => ({}));
+        return res.json({
+          success: true,
+          message: 'Connection successful, but insights access may be limited',
+          data: {
+            id: fbData.id,
+            name: fbData.name,
+            type: 'page'
+          },
+          warning: insightsError.error?.message || 'Unable to fetch insights. Please check permissions.'
+        });
+      }
+    }
+
+    res.json({ 
+      success: true,
+      message: 'Facebook API connection successful!',
+      data: {
+        id: fbData.id,
+        name: fbData.name,
+        type: settings.facebook_page_id ? 'page' : 'user'
+      }
+    });
+  } catch (error) {
+    console.error('Test Facebook connection error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error',
+      message: error.message 
+    });
+  }
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   // Check database connection

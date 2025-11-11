@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api-config';
 import { useTheme } from '../contexts/ThemeContext';
-import { Settings as SettingsIcon, Save, X, Eye, EyeOff } from 'lucide-react';
+import { Settings as SettingsIcon, Save, X, Eye, EyeOff, CheckCircle, AlertCircle, Loader } from 'lucide-react';
 
 const Settings = ({ user, onBack }) => {
   const { theme } = useTheme();
@@ -19,6 +19,8 @@ const Settings = ({ user, onBack }) => {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionTestResult, setConnectionTestResult] = useState(null);
 
   useEffect(() => {
     loadSettings();
@@ -77,6 +79,47 @@ const Settings = ({ user, onBack }) => {
 
   const handleChange = (key, value) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
+    // Clear connection test result when settings change
+    if (connectionTestResult) {
+      setConnectionTestResult(null);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    try {
+      setTestingConnection(true);
+      setError(null);
+      setSuccess(null);
+      setConnectionTestResult(null);
+
+      // First save current settings to test with them
+      await api.updateSettings({
+        facebook_app_id: settings.facebook_app_id,
+        facebook_app_secret: settings.facebook_app_secret,
+        facebook_access_token: settings.facebook_access_token,
+        facebook_page_id: settings.facebook_page_id,
+      });
+
+      // Then test the connection
+      const result = await api.testFacebookConnection();
+      
+      setConnectionTestResult(result);
+      if (result.success) {
+        setSuccess(result.message || 'Facebook API connection successful!');
+      } else {
+        setError(result.error || 'Connection test failed');
+      }
+    } catch (err) {
+      const errorMessage = err.message || 'Failed to test Facebook connection';
+      setError(errorMessage);
+      setConnectionTestResult({
+        success: false,
+        error: errorMessage
+      });
+      console.error('Error testing Facebook connection:', err);
+    } finally {
+      setTestingConnection(false);
+    }
   };
 
   if (loading) {
@@ -290,6 +333,95 @@ const Settings = ({ user, onBack }) => {
                   The Facebook Page ID to monitor (optional, can be extracted from post ID)
                 </p>
               </div>
+
+              {/* Test Connection Button */}
+              <div className="mb-6">
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  disabled={testingConnection || !settings.facebook_access_token?.trim()}
+                  className="btn-brutal-primary w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {testingConnection ? (
+                    <>
+                      <Loader className="w-5 h-5 animate-spin" />
+                      Testing Connection...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-5 h-5" />
+                      Test Facebook API Connection
+                    </>
+                  )}
+                </button>
+                {!settings.facebook_access_token?.trim() && (
+                  <p className="mt-2 text-sm text-orange-600 dark:text-orange-400">
+                    Please enter a Facebook Access Token to test the connection
+                  </p>
+                )}
+              </div>
+
+              {/* Connection Test Result */}
+              {connectionTestResult && (
+                <div className={`mb-6 p-4 border-2 rounded-lg ${
+                  connectionTestResult.success
+                    ? 'bg-green-100 dark:bg-green-900 border-green-500'
+                    : 'bg-red-100 dark:bg-red-900 border-red-500'
+                }`}>
+                  <div className="flex items-start gap-3">
+                    {connectionTestResult.success ? (
+                      <CheckCircle className="w-5 h-5 text-green-800 dark:text-green-200 flex-shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-red-800 dark:text-red-200 flex-shrink-0 mt-0.5" />
+                    )}
+                    <div className="flex-1">
+                      <p className={`font-bold mb-1 ${
+                        connectionTestResult.success
+                          ? 'text-green-800 dark:text-green-200'
+                          : 'text-red-800 dark:text-red-200'
+                      }`}>
+                        {connectionTestResult.success ? 'Connection Successful!' : 'Connection Failed'}
+                      </p>
+                      {connectionTestResult.message && (
+                        <p className={`text-sm mb-2 ${
+                          connectionTestResult.success
+                            ? 'text-green-700 dark:text-green-300'
+                            : 'text-red-700 dark:text-red-300'
+                        }`}>
+                          {connectionTestResult.message}
+                        </p>
+                      )}
+                      {connectionTestResult.data && (
+                        <div className={`text-sm mt-2 p-2 border-2 rounded ${
+                          connectionTestResult.success
+                            ? 'bg-green-50 dark:bg-green-950 border-green-400 text-green-900 dark:text-green-100'
+                            : ''
+                        }`}>
+                          <p><strong>ID:</strong> {connectionTestResult.data.id}</p>
+                          <p><strong>Name:</strong> {connectionTestResult.data.name}</p>
+                          <p><strong>Type:</strong> {connectionTestResult.data.type === 'page' ? 'Page' : 'User'}</p>
+                        </div>
+                      )}
+                      {connectionTestResult.details && (
+                        <p className={`text-sm mt-2 ${
+                          connectionTestResult.success
+                            ? 'text-green-700 dark:text-green-300'
+                            : 'text-red-700 dark:text-red-300'
+                        }`}>
+                          {connectionTestResult.details}
+                        </p>
+                      )}
+                      {connectionTestResult.warning && (
+                        <div className="mt-2 p-2 bg-yellow-100 dark:bg-yellow-900 border-2 border-yellow-500 rounded">
+                          <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                            <strong>Warning:</strong> {connectionTestResult.warning}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Error Message */}

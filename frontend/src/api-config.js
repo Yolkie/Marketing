@@ -298,6 +298,22 @@ export const api = {
     }
     return response.json();
   },
+
+  async testFacebookConnection() {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/facebook/test-connection`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || error.details || 'Failed to test Facebook connection');
+    }
+    return response.json();
+  },
 };
 
 
